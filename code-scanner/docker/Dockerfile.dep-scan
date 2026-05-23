@@ -20,8 +20,7 @@ RUN ARCH=$(uname -m) && \
       aarch64|arm64)  TARGET="aarch64-unknown-linux-gnu" ;; \
       *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
     esac && \
-    VERSION=$(curl -fsSL https://api.github.com/repos/tkdtaylor/dep-scan/releases/latest \
-      | grep '"tag_name"' | head -1 | sed 's/.*"\(v[^"]*\)".*/\1/') && \
+    VERSION="v1.2.1" && \
     curl -fsSL "https://github.com/tkdtaylor/dep-scan/releases/download/${VERSION}/dep-scan-${VERSION}-${TARGET}.tar.gz" \
       -o /tmp/dep-scan.tar.gz && \
     tar xzf /tmp/dep-scan.tar.gz -C /usr/local/bin && \
