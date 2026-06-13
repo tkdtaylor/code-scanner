@@ -39,7 +39,7 @@ This is a classic supply-chain attack pattern. Do not install.">
 | **Install hooks** | YES — postinstall in package.json / NONE |
 | **Binary files** | N (unreadable without decompilation) |
 | **Packed/obfuscated** | YES — UPX, base64, … / NO |
-| **dep-scan** | ✅ N packages checked (N npm, N PyPI) — N warnings, N blocks / ⚠️ image build failed — see error below |
+| **dep-scan** | ✅ N packages checked (N npm incl. N transitive, N PyPI) — N warnings, N blocks / ⚠️ image build failed — see error below |
 
 ---
 
@@ -100,13 +100,18 @@ exact code snippet
 > dep-scan runs on every scan. Include this section with the results table below. If the image build itself failed (network failure, Docker error), replace the table with:
 > "⚠️ **dep-scan image build failed** — dependency supply chain analysis could not run. Error: \<paste docker build error\>. Retry manually: `docker build -t dep-scan:latest -f code-scanner/docker/Dockerfile.dep-scan /path/to/dep-scan`"
 
-| Package | Version | Registry | Age | Flagged Policies |
-|---------|---------|----------|-----|------------------|
-| `expresss` | 0.0.0 | npm | 84401h | typosquatting (similar to `express`, distance: 0.12) |
-| `internal-utils` | 0.1.0 | npm | 891h | dependency_confusion (matches `internal-` prefix) |
-| `sketchy-lib` | 1.0.0 | pypi | 12h | age (< 48h), install_scripts (eval in setup.py) |
+| Package | Version | Registry | Depth | Age | Flagged Policies |
+|---------|---------|----------|-------|-----|------------------|
+| `expresss` | 0.0.0 | npm | direct | 84401h | typosquatting (similar to `express`, distance: 0.12) |
+| `internal-utils` | 0.1.0 | npm | direct | 891h | dependency_confusion (matches `internal-` prefix) |
+| `evil-transitive` | 2.1.0 | npm | transitive (depth 3) | 8h | age (< 48h), install_scripts (eval in postinstall) |
+| `sketchy-lib` | 1.0.0 | pypi | direct | 12h | age (< 48h), install_scripts (eval in setup.py) |
 
-> Packages that passed all 6 policies (age, install_scripts, typosquatting, vulnerability, maintainer_change, dependency_confusion) are omitted from this table. Only flagged packages are listed.
+> When a `package-lock.json` is present, npm dependencies are scanned **transitively** — the Depth column marks whether a package was declared directly or pulled in indirectly. PyPI manifests are scanned by direct dependency.
+>
+> Packages that passed all 11 policies (age, install_scripts, obfuscation, typosquatting, vulnerability, popularity, maintainer_change, dependency_confusion, npm_provenance, pypi_provenance, go_sumdb) are omitted from this table. Only flagged packages are listed. A lone `*_provenance` warning (no published attestation) is common and low-signal — don't over-weight it.
+>
+> If dep-scan reported any `transitive.diagnostics` (unresolved/unfetchable nodes), note them here — part of the tree went unscanned.
 >
 > Any dep-scan finding at `block` level should also appear in the main Findings section above as a HIGH-severity finding with full explanation.
 

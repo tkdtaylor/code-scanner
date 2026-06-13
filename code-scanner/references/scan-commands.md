@@ -231,13 +231,23 @@ docker run --rm \
   sh -c '
     found_any=false
 
-    # npm dependencies (from package.json)
+    # npm dependencies — prefer the lockfile so dep-scan can walk the
+    # transitive graph (--transitive only reaches depth > 0 with a lockfile;
+    # bare package names stay at depth 0). Fall back to package.json names
+    # when no lockfile is present.
     for pj in $(find /scan/repo -name package.json -not -path "*/node_modules/*" -not -path "*/.git/*"); do
-      deps=$(jq -r "(.dependencies // {}) + (.devDependencies // {}) | keys[]" "$pj" 2>/dev/null | tr "\n" " ")
-      if [ -n "$deps" ]; then
+      lock="$(dirname "$pj")/package-lock.json"
+      if [ -f "$lock" ]; then
         found_any=true
-        echo "=== npm deps from ${pj#/scan/repo/} ==="
-        dep-scan check $deps --registry npm --json 2>&1
+        echo "=== npm deps from ${lock#/scan/repo/} (transitive) ==="
+        dep-scan check --registry npm --lockfile "$lock" --transitive --json 2>&1
+      else
+        deps=$(jq -r "(.dependencies // {}) + (.devDependencies // {}) | keys[]" "$pj" 2>/dev/null | tr "\n" " ")
+        if [ -n "$deps" ]; then
+          found_any=true
+          echo "=== npm deps from ${pj#/scan/repo/} (direct only — no lockfile) ==="
+          dep-scan check $deps --registry npm --json 2>&1
+        fi
       fi
     done
 
@@ -272,17 +282,24 @@ docker run --rm \
 
 ### Interpreting dep-scan output
 
-dep-scan returns JSON when `--json` is used. Each package entry includes a `result` field and per-policy breakdown:
+dep-scan emits JSON when `--json` is used. There are **two shapes** depending on whether `--transitive` was passed:
 
-| dep-scan result | Code Scanner severity | Action |
+- **Without `--transitive`** (name-based calls, e.g. PyPI): a JSON **array** of package entries.
+- **With `--transitive`** (lockfile-based npm calls): a JSON **object** `{ "results": [...], "transitive": { "nodes": [...], "worst_verdict": ..., "diagnostics": [...] } }`. `results` is the same per-package array; `transitive.nodes` lists every resolved node with its `depth` (0 = direct dependency, > 0 = transitive) and `verdict`; `worst_verdict` rolls up the whole tree; `diagnostics` records any nodes that could not be resolved/fetched.
+
+Each package entry in `results` includes a top-level `result` field and a per-policy breakdown:
+
+| dep-scan result / verdict | Code Scanner severity | Action |
 |-----------------|-------------------|--------|
 | `block` | HIGH | Record as finding — the dependency failed a blocking policy |
 | `warn` | MEDIUM | Record as finding — the dependency triggered a warning |
 | `pass` | — | No action needed |
 
+For transitive findings, record the **depth** and the path context (a malicious package pulled in indirectly is still a real risk — note it was a transitive dependency at depth N, not declared directly). Also surface any non-empty `transitive.diagnostics` in the report, since an unresolved node means part of the tree went unscanned.
+
 dep-scan exit code `1` means at least one policy violation was found. Exit code `0` means all clean.
 
-The six policies checked: **age** (< 48h), **install_scripts** (eval/exec/subprocess in hooks), **typosquatting** (Levenshtein distance to popular packages), **vulnerability** (CVEs via OSV.dev), **maintainer_change** (ownership transfers), **dependency_confusion** (internal-looking names on public registries).
+The eleven policies checked: **age** (< 48h), **install_scripts** (eval/exec/subprocess in hooks), **obfuscation** (obfuscated package code), **typosquatting** (Levenshtein distance to popular packages), **vulnerability** (CVEs via OSV.dev), **popularity** (very-low-adoption packages), **maintainer_change** (ownership transfers), **dependency_confusion** (internal-looking names on public registries), **npm_provenance** / **pypi_provenance** (no published provenance attestation — frequently `warn`s for otherwise-fine packages, so treat a lone provenance warning as low-signal MEDIUM), **go_sumdb** (Go checksum-database verification).
 
 ---
 
@@ -564,13 +581,23 @@ docker run --rm \
   sh -c '
     found_any=false
 
-    # npm dependencies (from package.json)
+    # npm dependencies — prefer the lockfile so dep-scan can walk the
+    # transitive graph (--transitive only reaches depth > 0 with a lockfile;
+    # bare package names stay at depth 0). Fall back to package.json names
+    # when no lockfile is present.
     for pj in $(find /scan/repo -name package.json -not -path "*/node_modules/*" -not -path "*/.git/*"); do
-      deps=$(jq -r "(.dependencies // {}) + (.devDependencies // {}) | keys[]" "$pj" 2>/dev/null | tr "\n" " ")
-      if [ -n "$deps" ]; then
+      lock="$(dirname "$pj")/package-lock.json"
+      if [ -f "$lock" ]; then
         found_any=true
-        echo "=== npm deps from ${pj#/scan/repo/} ==="
-        dep-scan check $deps --registry npm --json 2>&1
+        echo "=== npm deps from ${lock#/scan/repo/} (transitive) ==="
+        dep-scan check --registry npm --lockfile "$lock" --transitive --json 2>&1
+      else
+        deps=$(jq -r "(.dependencies // {}) + (.devDependencies // {}) | keys[]" "$pj" 2>/dev/null | tr "\n" " ")
+        if [ -n "$deps" ]; then
+          found_any=true
+          echo "=== npm deps from ${pj#/scan/repo/} (direct only — no lockfile) ==="
+          dep-scan check $deps --registry npm --json 2>&1
+        fi
       fi
     done
 
