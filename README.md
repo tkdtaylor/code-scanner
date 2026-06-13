@@ -14,7 +14,7 @@ A portable [Agent Skill](https://www.anthropic.com/news/agent-skills) that scans
 > | Linux | [Docker Engine](https://docs.docker.com/engine/install/) |
 > | macOS | [Docker Desktop](https://docs.docker.com/desktop/install/mac-install/) |
 > | Windows | [Docker Desktop](https://docs.docker.com/desktop/install/windows-install/) with WSL2 |
-> | Docker Sandbox (`sbx`) | Scanning containers run normally inside the microVM. Use the "Balanced" network policy or add `ghcr.io`, `registry-1.docker.io`, `pypi.org`, `registry.npmjs.org` to your allow list. |
+> | Docker Sandbox (`sbx`) | Scanning containers run normally inside the microVM. Use the "Balanced" network policy or add `ghcr.io`, `registry-1.docker.io`, `pypi.org`, `registry.npmjs.org`, `crates.io`, `proxy.golang.org`, `sum.golang.org` to your allow list. |
 >
 > Verify Docker is running before use: `docker info`
 
@@ -26,7 +26,7 @@ A portable [Agent Skill](https://www.anthropic.com/news/agent-skills) that scans
 Given a GitHub repository URL, a zip archive, a PyPI or npm package name, or a local path already on disk, this skill instructs Claude to:
 
 1. **Remote targets**: create an isolated Docker volume and download the code into it, stripping all execute permissions. **Local paths**: skip the sandbox entirely and scan the files in place with native `grep`/`find` — no volume, no download, no copy.
-2. Check dependency manifests against the OSV vulnerability database and run dep-scan supply chain analysis — typosquatting, package age, maintainer changes, dependency confusion
+2. Check dependency manifests against the OSV vulnerability database and run dep-scan supply chain analysis — typosquatting, package age, maintainer changes, dependency confusion, missing provenance, plus transitive-tree scanning for lockfile-backed ecosystems (npm, Rust, Go)
 3. Statically analyze the code for malicious patterns (using `--network none` containers in sandbox mode, or native host tools in local mode)
 4. Follow any embedded download URLs and inspect those payloads inside an ephemeral Docker volume
 5. Write a structured Markdown report to `./code-scanner-reports/` on your machine
@@ -217,7 +217,7 @@ When running Claude Code inside a Docker Sandbox (`sbx`), all scanning container
 
 The only consideration is network policies. Scans need network access for:
 - **Image pulls**: `registry-1.docker.io`, `production.cloudflare.docker.com`, `ghcr.io` (OSV Scanner)
-- **API queries**: `api.osv.dev` (OSV), `api.github.com`, `pypi.org`, `registry.npmjs.org` (dep-scan)
+- **API queries**: `api.osv.dev` (OSV), `api.github.com`, `pypi.org`, `registry.npmjs.org`, `crates.io`, `proxy.golang.org`, `sum.golang.org` (dep-scan)
 
 The "Balanced" sbx network policy allows all of these by default. If you use a restrictive policy, add these domains to your allow list.
 
