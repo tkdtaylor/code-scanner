@@ -52,7 +52,7 @@ fi
 docker info > /dev/null 2>&1 && echo "Docker available" || echo "Docker not running"
 ```
 
-- **`ISOLATION=sbx`**: Docker Sandbox detected — scanning containers run normally inside the microVM. If scans fail to pull images or query APIs (OSV, dep-scan, PyPI, npm), your sbx network policy may be blocking them. Use the "Balanced" policy or add these domains to your allow list: `ghcr.io`, `registry-1.docker.io`, `production.cloudflare.docker.com`, `api.github.com`, `pypi.org`, `registry.npmjs.org`, `api.osv.dev`.
+- **`ISOLATION=sbx`**: Docker Sandbox detected — scanning containers run normally inside the microVM. If scans fail to pull images or query APIs (OSV, dep-scan, PyPI, npm), your sbx network policy may be blocking them. Use the "Balanced" policy or add these domains to your allow list: `ghcr.io`, `registry-1.docker.io`, `production.cloudflare.docker.com`, `api.github.com`, `pypi.org`, `registry.npmjs.org`, `crates.io`, `proxy.golang.org`, `sum.golang.org`, `api.osv.dev`.
 - **`ISOLATION=docker`**: Docker Engine available directly — the default path. All scan commands work as documented.
 - **`ISOLATION=none`**: No container runtime found. Only pure local mode scans will work (no OSV, no dep-scan, no sandbox for remote targets). Tell the user: "Docker is not available — only local path targets can be scanned, and dependency checks (OSV Scanner, dep-scan) will be skipped."
 
