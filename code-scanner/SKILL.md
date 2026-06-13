@@ -124,16 +124,19 @@ In sandbox mode, all analysis runs in Docker containers with `--network none` ag
 
 **OSV Scanner** — run first (requires brief network access to query the OSV API; only dependency metadata is sent, no repo code). Use the command in `references/scan-commands.md` → "OSV Scanner". In local mode, the same OSV container is used but it bind-mounts `$SCAN_ROOT` read-only instead of mounting the sandbox volume — see "Local Mode Commands" → "OSV Scanner (local)".
 
-**dep-scan** — run alongside OSV (also requires network access to query registry APIs). Checks every declared dependency for supply chain attack indicators that go beyond known vulnerabilities:
+**dep-scan** — run alongside OSV (also requires network access to query registry APIs). Checks every dependency for supply chain attack indicators that go beyond known vulnerabilities:
 - **Typosquatting** — package names similar to popular packages (Levenshtein distance)
 - **Package age** — recently published packages (< 48 hours)
 - **Maintainer changes** — ownership transfers or takeovers since last scan
 - **Dependency confusion** — internal-looking names on public registries
 - **Malicious install scripts** — eval, exec, child_process, subprocess in hooks
+- **Obfuscation, low popularity, and missing provenance attestation** — additional registry-metadata signals
+
+When a `package-lock.json` is present, the npm scan runs with `--transitive`, so the **entire dependency tree is walked**, not just declared deps — a malicious package pulled in indirectly is caught and reported with its depth. PyPI manifests (requirements*.txt, pyproject.toml) are scanned by direct-dependency name. See `references/scan-commands.md` → "Interpreting dep-scan output" for the two JSON output shapes (array vs. `{results, transitive}`).
 
 Uses the `dep-scan:latest` Docker image, which is **built automatically on first scan and after Dockerfile changes** — run the build/check block in `references/scan-commands.md` → "Build the dep-scan image" before invoking dep-scan. This step is mandatory; do not skip it. In local mode, the dep-scan container bind-mounts `$SCAN_ROOT` read-only — see "Local Mode Commands" → "dep-scan (local)". If the image build itself fails (network failure, Docker error), record the build error in the report and continue with the remaining scan steps.
 
-For each flagged dependency, record severity (dep-scan `block` → HIGH, `warn` → MEDIUM), the triggering policy, the package name and version, and a plain-English explanation.
+For each flagged dependency, record severity (dep-scan `block` → HIGH, `warn` → MEDIUM), the triggering policy, the package name and version, and a plain-English explanation. For a transitive finding, also note its **depth** (that it was pulled in indirectly, not declared). Surface any non-empty `transitive.diagnostics` — an unresolved node means part of the tree went unscanned.
 
 **Standard scan suite** — in sandbox mode, run the four batched containers from `references/scan-commands.md` → "Standard Scan Suite". In local mode, run the native equivalents from "Local Mode Commands" → "Standard Scan Suite (local)" — same patterns, run directly against `$SCAN_ROOT` with host `grep`/`find`. They cover, in priority order:
 1. Install hooks — run automatically without user action
