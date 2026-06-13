@@ -274,8 +274,22 @@ docker run --rm \
       fi
     done
 
+    # Rust crates (from Cargo.lock — carries the full resolved graph)
+    for cl in $(find /scan/repo -name "Cargo.lock" -not -path "*/.git/*"); do
+      found_any=true
+      echo "=== crates from ${cl#/scan/repo/} (transitive) ==="
+      dep-scan check --registry crates --lockfile "$cl" --transitive --json 2>&1
+    done
+
+    # Go modules (from go.sum — already the flattened transitive set)
+    for gs in $(find /scan/repo -name "go.sum" -not -path "*/.git/*"); do
+      found_any=true
+      echo "=== go modules from ${gs#/scan/repo/} (transitive) ==="
+      dep-scan check --registry go --lockfile "$gs" --transitive --json 2>&1
+    done
+
     if [ "$found_any" = false ]; then
-      echo "No dependency manifests found (package.json, requirements*.txt, pyproject.toml)."
+      echo "No dependency manifests found (package.json, requirements*.txt, pyproject.toml, Cargo.lock, go.sum)."
     fi
   '
 ```
@@ -284,8 +298,8 @@ docker run --rm \
 
 dep-scan emits JSON when `--json` is used. There are **two shapes** depending on whether `--transitive` was passed:
 
-- **Without `--transitive`** (name-based calls, e.g. PyPI): a JSON **array** of package entries.
-- **With `--transitive`** (lockfile-based npm calls): a JSON **object** `{ "results": [...], "transitive": { "nodes": [...], "worst_verdict": ..., "diagnostics": [...] } }`. `results` is the same per-package array; `transitive.nodes` lists every resolved node with its `depth` (0 = direct dependency, > 0 = transitive) and `verdict`; `worst_verdict` rolls up the whole tree; `diagnostics` records any nodes that could not be resolved/fetched.
+- **Without `--transitive`** (name-based calls — PyPI manifests): a JSON **array** of package entries.
+- **With `--transitive`** (lockfile-based calls — npm `package-lock.json`, Rust `Cargo.lock`, Go `go.sum`): a JSON **object** `{ "results": [...], "transitive": { "nodes": [...], "worst_verdict": ..., "diagnostics": [...] } }`. `results` is the same per-package array; `transitive.nodes` lists every resolved node with its `depth` (0 = direct dependency, > 0 = transitive) and `verdict`; `worst_verdict` rolls up the whole tree; `diagnostics` records any nodes that could not be resolved/fetched.
 
 Each package entry in `results` includes a top-level `result` field and a per-policy breakdown:
 
@@ -624,8 +638,22 @@ docker run --rm \
       fi
     done
 
+    # Rust crates (from Cargo.lock — carries the full resolved graph)
+    for cl in $(find /scan/repo -name "Cargo.lock" -not -path "*/.git/*"); do
+      found_any=true
+      echo "=== crates from ${cl#/scan/repo/} (transitive) ==="
+      dep-scan check --registry crates --lockfile "$cl" --transitive --json 2>&1
+    done
+
+    # Go modules (from go.sum — already the flattened transitive set)
+    for gs in $(find /scan/repo -name "go.sum" -not -path "*/.git/*"); do
+      found_any=true
+      echo "=== go modules from ${gs#/scan/repo/} (transitive) ==="
+      dep-scan check --registry go --lockfile "$gs" --transitive --json 2>&1
+    done
+
     if [ "$found_any" = false ]; then
-      echo "No dependency manifests found (package.json, requirements*.txt, pyproject.toml)."
+      echo "No dependency manifests found (package.json, requirements*.txt, pyproject.toml, Cargo.lock, go.sum)."
     fi
   '
 ```
