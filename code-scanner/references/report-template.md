@@ -39,7 +39,7 @@ This is a classic supply-chain attack pattern. Do not install.">
 | **Install hooks** | YES — postinstall in package.json / NONE |
 | **Binary files** | N (unreadable without decompilation) |
 | **Packed/obfuscated** | YES — UPX, base64, … / NO |
-| **dep-scan** | ✅ N packages checked (N npm incl. N transitive, N PyPI) — N warnings, N blocks / ⚠️ image build failed — see error below |
+| **dep-scan** | ✅ N packages checked (N npm, N PyPI, N crates, N Go; N transitive) — N warnings, N blocks / ⚠️ image build failed — see error below |
 
 ---
 
@@ -107,7 +107,7 @@ exact code snippet
 | `evil-transitive` | 2.1.0 | npm | transitive (depth 3) | 8h | age (< 48h), install_scripts (eval in postinstall) |
 | `sketchy-lib` | 1.0.0 | pypi | direct | 12h | age (< 48h), install_scripts (eval in setup.py) |
 
-> When a `package-lock.json` is present, npm dependencies are scanned **transitively** — the Depth column marks whether a package was declared directly or pulled in indirectly. PyPI manifests are scanned by direct dependency.
+> Lockfile-backed ecosystems (npm `package-lock.json`, Rust `Cargo.lock`, Go `go.sum`) are scanned **transitively** — the Depth column marks whether a package was declared directly or pulled in indirectly. PyPI manifests are scanned by direct dependency.
 >
 > Packages that passed all 11 policies (age, install_scripts, obfuscation, typosquatting, vulnerability, popularity, maintainer_change, dependency_confusion, npm_provenance, pypi_provenance, go_sumdb) are omitted from this table. Only flagged packages are listed. A lone `*_provenance` warning (no published attestation) is common and low-signal — don't over-weight it.
 >
