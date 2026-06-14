@@ -14,7 +14,7 @@ A portable [Agent Skill](https://www.anthropic.com/news/agent-skills) that scans
 > | Linux | [Docker Engine](https://docs.docker.com/engine/install/) |
 > | macOS | [Docker Desktop](https://docs.docker.com/desktop/install/mac-install/) |
 > | Windows | [Docker Desktop](https://docs.docker.com/desktop/install/windows-install/) with WSL2 |
-> | Docker Sandbox (`sbx`) | Scanning containers run normally inside the microVM. Use the "Balanced" network policy or add `ghcr.io`, `registry-1.docker.io`, `pypi.org`, `registry.npmjs.org`, `crates.io`, `proxy.golang.org`, `sum.golang.org` to your allow list. |
+> | Docker Sandbox (`sbx`) | Scanning containers run normally inside the microVM. Use the "Balanced" network policy or add `ghcr.io`, `registry-1.docker.io`, `production.cloudflare.docker.com`, `api.github.com`, `pypi.org`, `registry.npmjs.org`, `crates.io`, `proxy.golang.org`, `sum.golang.org`, `api.osv.dev` to your allow list. |
 >
 > Verify Docker is running before use: `docker info`
 
