@@ -419,7 +419,7 @@ docker run --rm --network none --security-opt no-new-privileges \
 
 ## Skill-Specific Checks
 
-Run when the target is a skill file or folder (Step 4b). Run all five in sequence.
+Run when the target is a skill file or folder (Step 4b). Run all eight in sequence. See `references/patterns.md` Categories 9 and 10 for severity guidance on each.
 
 ```bash
 # Check 1 — Prompt injection keywords
@@ -469,7 +469,41 @@ docker run --rm --network none --security-opt no-new-privileges \
 (anthropic|claude|system).{0,30}(authorized|approved|verified|certified|allow)|
 (admin|root|superuser|elevated).{0,30}(access|mode|privilege)' \
     /scan/repo 2>/dev/null | head -30"
+
+# Check 6 — Excessive agency, tool misuse & memory poisoning (patterns.md 9.7-9.9)
+docker run --rm --network none --security-opt no-new-privileges \
+  -v "${SCAN_ID}:/scan:ro" alpine:latest \
+  sh -c "grep -rEin \
+    '(without (asking|prompting|confirmation)|do not (ask|prompt|confirm)|automatically|proceed automatically).{0,40}(delete|deploy|send|pay|email|push|transfer|execute)|
+(grant|use|allow).{0,20}(all tools|any (command|tool)|full (filesystem|network|access))|
+(--force|--yes|-y\b|--no-verify|--dangerously-skip-permissions)|
+(always )?remember.{0,40}(for (all|every|future)|permanently|every (conversation|session|interaction))|
+from now on.{0,40}(every|all|each).{0,20}(conversation|session|response)' \
+    /scan/repo 2>/dev/null | head -40"
+
+# Check 7 — System-prompt leakage & rogue-agent self-modification (patterns.md 9.10-9.11)
+docker run --rm --network none --security-opt no-new-privileges \
+  -v "${SCAN_ID}:/scan:ro" alpine:latest \
+  sh -c "grep -rEin \
+    '(print|output|show|reveal|repeat|expose|return|echo).{0,30}(your )?(full )?(system )?(prompt|instructions?|rules?|directives?)|
+(encode|base64|summari[sz]e).{0,40}(system )?(prompt|instructions?).{0,40}(post|send|include|url|http)|
+open\(__file__|edit (your own|SKILL\.md|this skill)|append.{0,20}(your own (instructions?|source))|
+fetch.{0,40}(updated |new )?(instructions?|rules?).{0,20}(from|url|http).{0,40}(and (follow|apply|run))' \
+    /scan/repo 2>/dev/null | head -40"
+
+# Check 8 — MCP server threats: tool poisoning, over-broad scope, rug pull (patterns.md Category 10)
+# Run only if an MCP server is configured (mcpServers/@modelcontextprotocol present).
+docker run --rm --network none --security-opt no-new-privileges \
+  -v "${SCAN_ID}:/scan:ro" alpine:latest \
+  sh -c "grep -rEin \
+    '<(important|system|secret|hidden)>|do not (tell|mention|inform|reveal to) the user|
+(description|schema).{0,60}(read|cat|access).{0,40}(\.ssh|\.aws|\.env|id_rsa|credentials|token|secret)|
+(permission|scope|access|capability).{0,20}[:=].{0,10}(\"|'\'')?(\*|all|full|any)(\"|'\'')?|
+(tool|manifest|definitions?).{0,40}(fetch|load|download|pull).{0,20}(from )?(remote|url|http)' \
+    /scan/repo 2>/dev/null | head -40"
 ```
+
+> Checks 6–8 cover the agentic and MCP threat surface (`patterns.md` 9.6–9.11 and Category 10). Trigger / activation abuse (9.6) is assessed by reading the skill's `description` / trigger phrases directly rather than via grep: flag single-common-word triggers, triggers that shadow built-in or well-known skill names, and baiting triggers engineered to match all input. MCP rug-pull detection only flags the *capacity* to mutate — note in the report that confirming a real change needs a previously approved manifest to diff against.
 
 ---
 
@@ -741,7 +775,7 @@ done
 
 ### Skill-Specific Checks (local)
 
-Native host `grep` — same patterns as the sandbox version. Run all five in sequence.
+Native host `grep` — same patterns as the sandbox version. Run all eight in sequence.
 
 ```bash
 # Check 1 — Prompt injection keywords
@@ -781,7 +815,35 @@ grep -rEin \
 (anthropic|claude|system).{0,30}(authorized|approved|verified|certified|allow)|
 (admin|root|superuser|elevated).{0,30}(access|mode|privilege)' \
   "$SCAN_ROOT" 2>/dev/null | head -30
+
+# Check 6 — Excessive agency, tool misuse & memory poisoning (patterns.md 9.7-9.9)
+grep -rEin \
+  '(without (asking|prompting|confirmation)|do not (ask|prompt|confirm)|automatically|proceed automatically).{0,40}(delete|deploy|send|pay|email|push|transfer|execute)|
+(grant|use|allow).{0,20}(all tools|any (command|tool)|full (filesystem|network|access))|
+(--force|--yes|-y\b|--no-verify|--dangerously-skip-permissions)|
+(always )?remember.{0,40}(for (all|every|future)|permanently|every (conversation|session|interaction))|
+from now on.{0,40}(every|all|each).{0,20}(conversation|session|response)' \
+  "$SCAN_ROOT" 2>/dev/null | head -40
+
+# Check 7 — System-prompt leakage & rogue-agent self-modification (patterns.md 9.10-9.11)
+grep -rEin \
+  '(print|output|show|reveal|repeat|expose|return|echo).{0,30}(your )?(full )?(system )?(prompt|instructions?|rules?|directives?)|
+(encode|base64|summari[sz]e).{0,40}(system )?(prompt|instructions?).{0,40}(post|send|include|url|http)|
+open\(__file__|edit (your own|SKILL\.md|this skill)|append.{0,20}(your own (instructions?|source))|
+fetch.{0,40}(updated |new )?(instructions?|rules?).{0,20}(from|url|http).{0,40}(and (follow|apply|run))' \
+  "$SCAN_ROOT" 2>/dev/null | head -40
+
+# Check 8 — MCP server threats: tool poisoning, over-broad scope, rug pull (patterns.md Category 10)
+# Run only if an MCP server is configured (mcpServers/@modelcontextprotocol present).
+grep -rEin \
+  '<(important|system|secret|hidden)>|do not (tell|mention|inform|reveal to) the user|
+(description|schema).{0,60}(read|cat|access).{0,40}(\.ssh|\.aws|\.env|id_rsa|credentials|token|secret)|
+(permission|scope|access|capability).{0,20}[:=].{0,10}.?(\*|all|full|any).?|
+(tool|manifest|definitions?).{0,40}(fetch|load|download|pull).{0,20}(from )?(remote|url|http)' \
+  "$SCAN_ROOT" 2>/dev/null | head -40
 ```
+
+> Trigger / activation abuse (`patterns.md` 9.6) is judged by reading the skill's `description` / trigger phrases directly, not by grep — flag single-common-word, shadowing, or baiting triggers.
 
 ### Step 8: Review (local)
 

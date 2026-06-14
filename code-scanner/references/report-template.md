@@ -187,7 +187,13 @@ or activated at a later date.
 >
 > **Checked:** obfuscation, download-and-execute, supply chain hooks, credential
 > harvesting, reverse shells, cryptominer indicators, data exfiltration,
-> privilege escalation, N embedded URLs
+> privilege escalation, web shells, N embedded URLs
+>
+> *(skill / MCP targets also checked:* prompt injection, data-exfiltration &
+> credential-access instructions, dangerous embedded commands, false permission
+> claims, trigger abuse, excessive agency, tool misuse, memory poisoning,
+> system-prompt leakage, rogue-agent self-modification, MCP tool poisoning &
+> least-privilege*)*
 
 ---
 

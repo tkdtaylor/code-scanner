@@ -161,15 +161,20 @@ For every finding, record:
 
 Run when the target is a skill file or folder — in addition to the standard suite above.
 
-Skill files are markdown documents that instruct Claude how to behave. The threat here is manipulation of Claude itself rather than execution of malicious binaries. Run the five checks from `references/scan-commands.md` → "Skill-Specific Checks" (sandbox mode) or "Local Mode Commands" → "Skill-Specific Checks (local)" (local mode, which is the common case for skills):
+Skill files are markdown documents that instruct Claude how to behave. The threat here is manipulation of Claude itself rather than execution of malicious binaries. Run the eight checks from `references/scan-commands.md` → "Skill-Specific Checks" (sandbox mode) or "Local Mode Commands" → "Skill-Specific Checks (local)" (local mode, which is the common case for skills):
 
 1. Prompt injection keywords
 2. Data exfiltration instructions
 3. Credential access instructions
 4. Dangerous embedded commands
 5. Permission and identity claims
+6. Excessive agency, tool misuse, and memory poisoning
+7. System-prompt leakage and rogue-agent self-modification
+8. MCP server threats (tool poisoning, over-broad scope, rug pull) — only when the skill bundles or configures an MCP server
 
-See `references/patterns.md` Category 9 for the full pattern library and severity guidance.
+Then assess **trigger / activation abuse** by reading the skill's `description` / trigger phrases directly (not via grep): flag triggers that are a single common word, that shadow a built-in or well-known skill name, or that are engineered to match nearly all input. A broad or baiting trigger raises the severity of any other skill finding by one level — the skill is built to fire constantly *and* misbehave.
+
+See `references/patterns.md` Category 9 (agentic-skill threats) and Category 10 (MCP server threats) for the full pattern library and severity guidance.
 
 ---
 
