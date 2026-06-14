@@ -1,6 +1,6 @@
 # Code Scanner — A Claude Skill for Malicious Code Detection
 
-A portable [Agent Skill](https://www.anthropic.com/news/agent-skills) that scans a code repository for malicious patterns, suspicious links, and supply-chain attack indicators. Works across Claude Code, GitHub Copilot, Cursor, Windsurf, Kiro, and Google Antigravity.
+A portable [Agent Skill](https://www.anthropic.com/news/agent-skills) that scans code repositories, published packages, and Claude skills — including bundled MCP servers — for malicious patterns, suspicious links, and supply-chain attack indicators. Works across Claude Code, GitHub Copilot, Cursor, Windsurf, Kiro, and Google Antigravity.
 
 ![code-scanner architecture: untrusted code contained inside a secure disposable Docker boundary while scanners produce a Markdown report](assets/code-scanner-architecture.png)
 
@@ -23,7 +23,7 @@ A portable [Agent Skill](https://www.anthropic.com/news/agent-skills) that scans
 
 ## What it does
 
-Given a GitHub repository URL, a zip archive, a PyPI or npm package name, or a local path already on disk, this skill instructs Claude to:
+Given a GitHub repository URL, a zip archive, a PyPI or npm package name, a Claude skill folder (or `SKILL.md`), or a local path already on disk, this skill instructs Claude to:
 
 1. **Remote targets**: create an isolated Docker volume and download the code into it, stripping all execute permissions. **Local paths**: skip the sandbox entirely and scan the files in place with native `grep`/`find` — no volume, no download, no copy.
 2. Check dependency manifests against the OSV vulnerability database and run dep-scan supply chain analysis — typosquatting, package age, maintainer changes, dependency confusion, missing provenance, plus transitive-tree scanning for lockfile-backed ecosystems (npm, Rust, Go)
