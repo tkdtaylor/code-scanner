@@ -60,20 +60,27 @@ Add `--security-review` to any phrase to force the Claude Code security review s
 - **Python `.pth` persistence** — executable code in `.pth` files that run on every Python startup (used in the LiteLLM attack)
 - **Credential harvesting** — reading env vars, `.env` files, SSH keys, cloud credentials, cloud instance metadata endpoints (`169.254.169.254`)
 - **Reverse shells** — outbound connection patterns, netcat, socat
-- **Cryptominers** — known miner binaries and pool addresses
+- **Cryptominers** — known miner binaries, pool addresses, and stratum protocol methods
+- **Web shells** — dynamic-input-to-execution sinks in PHP/JSP/ASP (`eval($_POST)` and similar)
 - **Data exfiltration** — sending data to remote endpoints
 - **Suspicious domains/IPs** — hardcoded C2 infrastructure indicators
 - **Persistence mechanisms** — systemd user services, launchd agents, cron injection, SUID bits, sudo abuse
 - **Unpinned CI/CD actions** — third-party GitHub Actions using mutable version tags instead of commit SHAs (the Trivy/LiteLLM attack vector)
 - **Recursive payloads** — secondary download URLs fetched and inspected inside the sandbox
 
-**Claude skill files:**
+**Claude skill files (and bundled MCP servers):**
 - **Prompt injection** — instructions designed to override Claude's behaviour or safety guidelines
 - **Identity manipulation** — attempts to replace Claude's role or claim special permissions
 - **False endorsement** — falsely claiming the skill is verified or authorized by Anthropic
 - **Exfiltration instructions** — directing Claude to send conversation data to remote endpoints
 - **Credential access instructions** — directing Claude to read and expose SSH keys, API keys, `.env` files
 - **Dangerous embedded commands** — harmful shell commands within skill instructions
+- **Trigger / activation abuse** — overly broad, shadowing, or baiting trigger phrases that widen the skill's activation surface
+- **Excessive agency & tool misuse** — autonomous high-impact actions without human-in-the-loop, blanket tool/permission grants, unsafe tool defaults
+- **Memory poisoning** — instructions crafted to persist in agent memory or stuff the context across turns
+- **System-prompt leakage** — attempts to extract Claude's system prompt or hidden instructions
+- **Rogue agent** — self-modifying skills and unauthorized cross-session persistence (the "rug pull")
+- **MCP server threats** — tool-description poisoning, over-broad capability scope, and runtime-mutable (rug-pull-capable) tool manifests
 
 ## Output
 
@@ -274,3 +281,5 @@ This project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENS
 **Free for:** personal use, research, education, hobby projects, charitable and government organisations.
 
 **Commercial use** (companies, paid products, internal business tooling) requires a separate commercial license. Contact: kevin@taylorguard.me
+
+Third-party ideas and threat indicators incorporated into the pattern library are credited in [ATTRIBUTIONS.md](ATTRIBUTIONS.md).
