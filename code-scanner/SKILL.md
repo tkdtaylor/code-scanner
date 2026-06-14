@@ -29,7 +29,7 @@ Extract the target from the user's message:
 
 Otherwise set `LOCAL_MODE=false` — the remote target will be downloaded into a Docker sandbox volume (Step 2).
 
-If the target is a skill folder or `SKILL.md`, follow the **skill scanning** path (Step 4b). Skill scanning checks for prompt injection, dangerous embedded commands, and data exfiltration instructions in addition to the standard suite. Skill paths on disk always use local mode.
+If the target is a skill folder or `SKILL.md`, follow the **skill scanning** path (Step 4b). Skill scanning adds checks for prompt injection, dangerous embedded commands, data exfiltration, excessive agency, tool misuse, memory poisoning, system-prompt leakage, rogue-agent self-modification, trigger abuse, and bundled-MCP-server threats, on top of the standard suite. Skill paths on disk always use local mode.
 
 If no target is provided, ask: "Please provide the GitHub repository URL, package name, archive link, or local path you'd like me to scan."
 
