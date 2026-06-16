@@ -273,6 +273,47 @@ def test_validator_accepts_empty_runs():
     assert cs.validate_sarif({"version": "2.1.0", "runs": []}) == []
 
 
+# --- semgrep ruleset resolution ------------------------------------------------
+
+def test_semgrep_config_defaults_to_bundled_offline_rules():
+    cs.SEMGREP_CONFIG_OVERRIDE = None
+    os.environ.pop("CODE_SCANNER_SEMGREP_CONFIG", None)
+    cfg = cs._semgrep_config()
+    assert cfg.endswith(os.path.join("cli", "semgrep-rules"))
+    assert os.path.isdir(cfg)
+    rule_files = [f for f in os.listdir(cfg) if f.endswith((".yaml", ".yml"))]
+    assert rule_files, "bundled ruleset dir must contain rule files"
+    assert cfg != "auto", "must not default to networked --config auto"
+
+
+def test_semgrep_config_override_precedence():
+    try:
+        cs.SEMGREP_CONFIG_OVERRIDE = "p/ci"
+        assert cs._semgrep_config() == "p/ci"
+        cs.SEMGREP_CONFIG_OVERRIDE = None
+        os.environ["CODE_SCANNER_SEMGREP_CONFIG"] = "/tmp/myrules"
+        assert cs._semgrep_config() == "/tmp/myrules"
+    finally:
+        cs.SEMGREP_CONFIG_OVERRIDE = None
+        os.environ.pop("CODE_SCANNER_SEMGREP_CONFIG", None)
+
+
+def test_bundled_semgrep_rules_are_valid_yaml():
+    import importlib.util as _u
+    if _u.find_spec("yaml") is None:
+        pytest.skip("PyYAML not available to validate rule syntax")
+    import yaml
+    rules_dir = os.path.join(REPO, "cli", "semgrep-rules")
+    for fn in os.listdir(rules_dir):
+        if not fn.endswith((".yaml", ".yml")):
+            continue
+        with open(os.path.join(rules_dir, fn)) as fh:
+            doc = yaml.safe_load(fh)
+        assert isinstance(doc.get("rules"), list) and doc["rules"], fn
+        for r in doc["rules"]:
+            assert r.get("id") and r.get("languages") and r.get("severity"), fn
+
+
 # --- opt-in real-tools integration ---------------------------------------------
 
 REAL = os.environ.get("CODE_SCANNER_REAL_TOOLS") == "1"

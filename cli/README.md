@@ -48,9 +48,19 @@ Socket-less native-tools execution model — **no Docker/Podman socket required*
 Provision these on `PATH` (they `cp` into a `--gate-tools` dir and mount into a
 rootless execution-box like `golangci-lint` and `gods`):
 
-- [`osv-scanner`](https://github.com/google/osv-scanner) — known-vulnerability lookup (version-aware).
-- [`semgrep`](https://semgrep.dev) — static analysis (emits SARIF natively).
-- [`dep-scan`](https://github.com/tkdtaylor/dep-scan) — supply-chain policy checks.
+- [`osv-scanner`](https://github.com/google/osv-scanner) — known-vulnerability lookup (version-aware). *Network: OSV API.*
+- [`semgrep`](https://semgrep.dev) — static analysis (emits SARIF natively). *Offline by default* — see below.
+- [`dep-scan`](https://github.com/tkdtaylor/dep-scan) — supply-chain policy checks. *Network: registry + OSV APIs.*
+
+### Semgrep ruleset (pinned + offline)
+
+Semgrep runs against a **bundled, version-controlled ruleset** ([semgrep-rules/](semgrep-rules/))
+with `--metrics off --disable-version-check` — **no `--config auto`, no registry
+fetch, no network**. This keeps the Semgrep tier reproducible: a gate must not
+fail or pass differently because registry rules drifted. Override for a richer
+(possibly networked) scan with `--semgrep-config <path|spec>` or
+`CODE_SCANNER_SEMGREP_CONFIG` (e.g. `p/ci`). Only `osv-scanner` and `dep-scan`
+still need outbound network.
 
 A missing tool reduces coverage (recorded as a stderr note); missing *all three*
 is a fail-closed `2`. The CLI itself is a single stdlib-only Python 3 script — no

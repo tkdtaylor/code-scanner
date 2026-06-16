@@ -186,12 +186,44 @@ def run_osv_scanner(target):
     return findings
 
 
+# Set from --semgrep-config; resolution precedence: flag → env → bundled → auto.
+SEMGREP_CONFIG_OVERRIDE = None
+
+
+def _semgrep_config():
+    """Resolve the Semgrep ruleset. Defaults to the bundled, pinned, offline set.
+
+    A deterministic gate must not depend on `--config auto`, which both reaches the
+    registry over the network AND drifts as registry rules change. The bundled
+    ruleset (cli/semgrep-rules/) is version-controlled and reproducible. Override
+    with --semgrep-config or CODE_SCANNER_SEMGREP_CONFIG (a path or a semgrep spec
+    like p/ci) when you want a richer, possibly-networked scan.
+    """
+    if SEMGREP_CONFIG_OVERRIDE:
+        return SEMGREP_CONFIG_OVERRIDE
+    env = os.environ.get("CODE_SCANNER_SEMGREP_CONFIG")
+    if env:
+        return env
+    bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "semgrep-rules")
+    if os.path.isdir(bundled):
+        return bundled
+    print(f"{TOOL_NAME}: bundled semgrep rules not found; falling back to "
+          f"'--config auto' (networked, non-reproducible)", file=sys.stderr)
+    return "auto"
+
+
 def run_semgrep(target):
-    """Semgrep native binary (SARIF output). Returns list[Finding]."""
+    """Semgrep native binary (SARIF output). Returns list[Finding].
+
+    Runs offline by default (pinned bundled ruleset, metrics off, no version
+    check) so the deterministic tier needs no network.
+    """
     if not _have("semgrep"):
         return None
     rc, out, err = _run(
-        ["semgrep", "--quiet", "--sarif", "--config", "auto", target]
+        ["semgrep", "--quiet", "--sarif", "--metrics", "off",
+         "--disable-version-check", "--config", _semgrep_config(), target]
     )
     if rc not in (0, 1):
         if not out.strip():
@@ -589,7 +621,9 @@ The gating exit code derives from the deterministic tier ONLY (TASK-001 REQ-003)
 Execution model (ADR-002): deterministic tools run as native binaries on PATH —
 no Docker/Podman socket. Provision osv-scanner, semgrep, and dep-scan on PATH;
 missing tools reduce coverage, and zero available tools is a fail-closed tool
-failure.
+failure. Semgrep uses a pinned, bundled, offline ruleset by default (no registry
+fetch) so the gate is reproducible; override with --semgrep-config. osv-scanner
+and dep-scan still query their CVE/registry APIs over the network.
 
 Exit codes:
   0   clean — no gating findings at/above the severity threshold
@@ -614,9 +648,16 @@ def main(argv=None):
                         help="gating floor: CRITICAL, HIGH, MEDIUM, LOW, or INFO "
                              "(or a comma list; the lowest wins). Default: HIGH "
                              "(CRITICAL+HIGH gate).")
+    parser.add_argument("--semgrep-config", metavar="SPEC",
+                        help="Semgrep ruleset: a path or a semgrep spec (e.g. "
+                             "p/ci). Default: the bundled offline ruleset "
+                             "(reproducible). Also CODE_SCANNER_SEMGREP_CONFIG.")
     parser.add_argument("--version", action="version",
                         version=f"{TOOL_NAME} {__version__}")
     args = parser.parse_args(argv)
+
+    global SEMGREP_CONFIG_OVERRIDE
+    SEMGREP_CONFIG_OVERRIDE = args.semgrep_config
 
     target = os.path.abspath(args.target)
     if not os.path.isdir(target):
