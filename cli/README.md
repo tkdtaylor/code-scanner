@@ -37,7 +37,10 @@ the tiers.
 | `64` | usage error (bad arguments / target not a directory) |
 
 `2` is **fail-closed**: if zero deterministic tools are on PATH, the scan cannot
-certify anything and refuses to report clean.
+certify anything and refuses to report clean. The CLI also structurally
+self-validates the SARIF it builds before emitting; if it ever produces malformed
+SARIF (an internal bug) it returns `2` rather than shipping bad output to a
+consumer.
 
 ## Runtime dependencies (REQ-006 / ADR-002)
 

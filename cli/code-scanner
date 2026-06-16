@@ -525,6 +525,57 @@ def build_sarif(findings, target, ran=None):
     }
 
 
+_VALID_LEVELS = {"error", "warning", "note", "none"}
+
+
+def validate_sarif(sarif):
+    """Stdlib-only structural check of the SARIF we built (no jsonschema dep).
+
+    Returns a list of problem strings; empty == valid. Guards against emitting
+    malformed SARIF that a strict consumer (agent-builder's audit seam, GitHub
+    code scanning) would reject. This validates OUR own output, so any problem is
+    an internal bug — the caller fails closed rather than shipping bad SARIF.
+    """
+    problems = []
+    if not isinstance(sarif, dict):
+        return ["top level is not an object"]
+    if sarif.get("version") != "2.1.0":
+        problems.append(f"version must be '2.1.0', got {sarif.get('version')!r}")
+    runs = sarif.get("runs")
+    if not isinstance(runs, list):
+        return problems + ["'runs' must be a list"]
+    for i, run in enumerate(runs):
+        where = f"runs[{i}]"
+        driver = ((run.get("tool") or {}).get("driver") or {})
+        if not isinstance(driver.get("name"), str) or not driver["name"]:
+            problems.append(f"{where}.tool.driver.name missing or empty")
+        rule_ids = set()
+        for j, rule in enumerate(driver.get("rules", []) or []):
+            rid = rule.get("id")
+            if not isinstance(rid, str) or not rid:
+                problems.append(f"{where}.tool.driver.rules[{j}].id missing")
+            else:
+                rule_ids.add(rid)
+        results = run.get("results")
+        if not isinstance(results, list):
+            problems.append(f"{where}.results must be a list")
+            continue
+        for k, res in enumerate(results):
+            rwhere = f"{where}.results[{k}]"
+            if not isinstance(res.get("ruleId"), str) or not res["ruleId"]:
+                problems.append(f"{rwhere}.ruleId missing or empty")
+            if res.get("level") not in _VALID_LEVELS:
+                problems.append(f"{rwhere}.level invalid: {res.get('level')!r}")
+            if not isinstance((res.get("message") or {}).get("text"), str):
+                problems.append(f"{rwhere}.message.text missing")
+            for loc in res.get("locations", []) or []:
+                uri = (((loc.get("physicalLocation") or {})
+                        .get("artifactLocation") or {}).get("uri"))
+                if uri is not None and not isinstance(uri, str):
+                    problems.append(f"{rwhere}.locations[].uri must be a string")
+    return problems
+
+
 # --- CLI -----------------------------------------------------------------------
 
 HELP_EPILOG = """\
@@ -612,8 +663,17 @@ def main(argv=None):
     findings.extend(run_pattern_scan(target))
     ran.append(("code-scanner-patterns", TIER_BEST_EFFORT))
 
-    # --- emit SARIF ---
+    # --- build + self-validate SARIF (fail closed on malformed output) ---
     sarif = build_sarif(findings, target, ran)
+    problems = validate_sarif(sarif)
+    if problems:
+        print(f"{TOOL_NAME}: internal error — produced invalid SARIF, refusing "
+              f"to emit:", file=sys.stderr)
+        for p in problems[:10]:
+            print(f"  - {p}", file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+
+    # --- emit SARIF ---
     sarif_text = json.dumps(sarif, indent=2)
     if args.sarif:
         try:
