@@ -1,4 +1,4 @@
-# A benign, pinned dependency set. The fake/real deterministic tier reports
-# nothing for these — the clean twin of vulnerable-repo.
-requests==2.32.3
+# A benign dependency with no known OSV advisories — the clean twin of
+# vulnerable-repo. (Real dep-scan may emit a low-signal MEDIUM provenance warning,
+# which is below the HIGH gate and does not fail the build.)
 click==8.1.7

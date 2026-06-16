@@ -1,16 +1,14 @@
 """A small, benign module — no malicious patterns, no risky calls."""
 
 import click
-import requests
 
 
 @click.command()
-@click.argument("url")
-def fetch(url: str) -> None:
-    """Fetch a URL and print its status code."""
-    resp = requests.get(url, timeout=10)
-    click.echo(f"{url} -> {resp.status_code}")
+@click.argument("name")
+def greet(name: str) -> None:
+    """Print a greeting."""
+    click.echo(f"Hello, {name}!")
 
 
 if __name__ == "__main__":
-    fetch()
+    greet()

@@ -72,3 +72,16 @@ CODE_SCANNER_REAL_TOOLS=1 python3 -m pytest tests/test_gate_cli.py -k real
 The hermetic suite injects stub tools on PATH and asserts the exit-code + SARIF
 contract against the L5 fixtures (`tests/fixtures/{clean,vulnerable}-repo`). The
 opt-in suite runs the real binaries when present.
+
+### Reproducible real-tools run (container)
+
+`tests/docker/` builds a runner image with all three tools pinned (osv-scanner,
+semgrep, dep-scan) — no Docker/Podman socket used inside it (ADR-002). Needs
+outbound network for the live registries/CVE APIs:
+
+```
+tests/docker/run-integration.sh            # build + run the whole suite (17 tests)
+```
+
+Each `--rm` run starts with a cold dep-scan cache, so verdicts come back fresh and
+attributable (avoiding the cache caveat above).
