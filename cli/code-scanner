@@ -1,0 +1,764 @@
+#!/usr/bin/env python3
+# code-scanner — headless CLI gate mode
+#
+# A deterministic, non-interactive scanner entrypoint for CI / verification-gate
+# use. Emits a process exit code and machine-readable SARIF (ADR-001). Runs the
+# deterministic tier (OSV-Scanner / Semgrep / dep-scan) as NATIVE binaries on
+# PATH — no Docker/Podman socket (ADR-002, socket-less native-tools mode) — and
+# the heuristic pattern library as an ADVISORY tier.
+#
+# This is an ADDITIONAL entrypoint. The conversational Agent Skill (SKILL.md) is
+# unchanged (TASK-001 REQ-007).
+#
+# Single-file, stdlib-only, shebang shim: `cp` it into a gate-tools dir and mount
+# it into a rootless execution-box exactly like dep-scan's `gods` (REQ-006).
+#
+# License: PolyForm Noncommercial 1.0.0 (see repo LICENSE).
+
+"""Headless gate-mode scanner: exit code + SARIF from the deterministic tier."""
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+__version__ = "1.0.0"
+TOOL_NAME = "code-scanner"
+
+# --- Exit-code contract (TASK-001 REQ-002; keep in sync with --help) -----------
+EXIT_CLEAN = 0          # no gating findings at/above threshold
+EXIT_FINDINGS = 1       # deterministic-tier gating findings present
+EXIT_TOOL_FAILURE = 2   # a tool errored, or zero deterministic tools available
+EXIT_USAGE = 64         # bad CLI invocation (sysexits EX_USAGE)
+
+# --- Severity model ------------------------------------------------------------
+# Ordered high→low. Index is used for threshold comparison.
+SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+SEV_RANK = {s: i for i, s in enumerate(SEVERITIES)}
+
+# Severity → SARIF level. Defined ONCE here and consistent with ADR-001
+# (CRITICAL/HIGH → error, MEDIUM → warning, LOW/INFO → note).
+SEV_TO_LEVEL = {
+    "CRITICAL": "error",
+    "HIGH": "error",
+    "MEDIUM": "warning",
+    "LOW": "note",
+    "INFO": "note",
+}
+
+# Severity → GitHub code-scanning `security-severity` numeric string. Advisory
+# metadata for consumers (GitHub, DefectDojo); does not affect our gating.
+SEV_TO_SECURITY_SEVERITY = {
+    "CRITICAL": "9.5",
+    "HIGH": "8.0",
+    "MEDIUM": "5.0",
+    "LOW": "2.0",
+    "INFO": "0.0",
+}
+
+# Reliability tiers (ADR-001). Only "deterministic" tools can gate (REQ-003).
+TIER_DETERMINISTIC = "deterministic"
+TIER_BEST_EFFORT = "best-effort"
+
+
+class Finding:
+    """A single normalized result, tier-tagged so SARIF consumers can weight it."""
+
+    __slots__ = ("rule_id", "severity", "message", "path", "line", "driver",
+                 "tier", "help_uri")
+
+    def __init__(self, rule_id, severity, message, driver, tier,
+                 path=None, line=None, help_uri=None):
+        self.rule_id = rule_id
+        self.severity = severity if severity in SEV_RANK else "MEDIUM"
+        self.message = message
+        self.path = path
+        self.line = line
+        self.driver = driver
+        self.tier = tier
+        self.help_uri = help_uri
+
+    @property
+    def level(self):
+        return SEV_TO_LEVEL[self.severity]
+
+    def gates(self, threshold_rank):
+        """True if this finding fails the gate: deterministic tier AND severe enough."""
+        return self.tier == TIER_DETERMINISTIC and SEV_RANK[self.severity] <= threshold_rank
+
+
+# --- Tool invocation helpers ---------------------------------------------------
+
+class ToolError(Exception):
+    """A deterministic tool was present on PATH but failed to run/parse."""
+
+
+def _have(tool):
+    return shutil.which(tool) is not None
+
+
+def _run(cmd, cwd=None):
+    """Run a tool, return (returncode, stdout, stderr). Never raises on non-zero."""
+    proc = subprocess.run(
+        cmd, cwd=cwd, capture_output=True, text=True, check=False,
+    )
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _cvss_to_severity(score):
+    try:
+        s = float(score)
+    except (TypeError, ValueError):
+        return None
+    if s >= 9.0:
+        return "CRITICAL"
+    if s >= 7.0:
+        return "HIGH"
+    if s >= 4.0:
+        return "MEDIUM"
+    if s > 0.0:
+        return "LOW"
+    return "INFO"
+
+
+def _osv_severity(vuln):
+    """Best severity we can extract from an OSV vulnerability object."""
+    # 1) explicit CVSS vector/score under `severity`
+    for sev in vuln.get("severity", []) or []:
+        mapped = _cvss_to_severity(sev.get("score"))
+        if mapped:
+            return mapped
+    # 2) database_specific severity string (GHSA style: CRITICAL/HIGH/MODERATE/LOW)
+    ds = (vuln.get("database_specific") or {}).get("severity")
+    if isinstance(ds, str):
+        u = ds.upper()
+        if u in SEV_RANK:
+            return u
+        if u == "MODERATE":
+            return "MEDIUM"
+    # 3) unknown — a known CVE on a dependency is not nothing, but we will not
+    #    gate on an unscored vuln; treat as MEDIUM (advisory unless threshold low).
+    return "MEDIUM"
+
+
+# --- Deterministic tier --------------------------------------------------------
+
+def run_osv_scanner(target):
+    """OSV-Scanner native binary. Returns list[Finding]. Raises ToolError on break."""
+    if not _have("osv-scanner"):
+        return None  # not installed → caller records reduced coverage
+    rc, out, err = _run(
+        ["osv-scanner", "--recursive", "--format", "json", target]
+    )
+    # OSV-Scanner exits 1 when vulns are found, 0 when clean, 127/128 on error.
+    if rc not in (0, 1):
+        if not out.strip():
+            raise ToolError(f"osv-scanner failed (rc={rc}): {err.strip()[:200]}")
+    if not out.strip():
+        return []
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError as e:
+        raise ToolError(f"osv-scanner emitted unparseable JSON: {e}")
+
+    findings = []
+    for res in data.get("results", []) or []:
+        src = (res.get("source") or {}).get("path", "")
+        rel = _rel(src, target)
+        for pkg in res.get("packages", []) or []:
+            name = (pkg.get("package") or {}).get("name", "?")
+            ver = (pkg.get("package") or {}).get("version", "?")
+            for vuln in pkg.get("vulnerabilities", []) or []:
+                vid = vuln.get("id", "OSV-UNKNOWN")
+                summary = vuln.get("summary") or vuln.get("details", "")[:160] or vid
+                findings.append(Finding(
+                    rule_id=vid,
+                    severity=_osv_severity(vuln),
+                    message=f"{name}@{ver}: {summary}",
+                    driver="osv-scanner",
+                    tier=TIER_DETERMINISTIC,
+                    path=rel or None,
+                    help_uri=f"https://osv.dev/vulnerability/{vid}",
+                ))
+    return findings
+
+
+# Set from --semgrep-config; resolution precedence: flag → env → bundled → auto.
+SEMGREP_CONFIG_OVERRIDE = None
+
+
+def _semgrep_config():
+    """Resolve the Semgrep ruleset. Defaults to the bundled, pinned, offline set.
+
+    A deterministic gate must not depend on `--config auto`, which both reaches the
+    registry over the network AND drifts as registry rules change. The bundled
+    ruleset (cli/semgrep-rules/) is version-controlled and reproducible. Override
+    with --semgrep-config or CODE_SCANNER_SEMGREP_CONFIG (a path or a semgrep spec
+    like p/ci) when you want a richer, possibly-networked scan.
+    """
+    if SEMGREP_CONFIG_OVERRIDE:
+        return SEMGREP_CONFIG_OVERRIDE
+    env = os.environ.get("CODE_SCANNER_SEMGREP_CONFIG")
+    if env:
+        return env
+    bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "semgrep-rules")
+    if os.path.isdir(bundled):
+        return bundled
+    print(f"{TOOL_NAME}: bundled semgrep rules not found; falling back to "
+          f"'--config auto' (networked, non-reproducible)", file=sys.stderr)
+    return "auto"
+
+
+def run_semgrep(target):
+    """Semgrep native binary (SARIF output). Returns list[Finding].
+
+    Runs offline by default (pinned bundled ruleset, metrics off, no version
+    check) so the deterministic tier needs no network.
+    """
+    if not _have("semgrep"):
+        return None
+    rc, out, err = _run(
+        ["semgrep", "--quiet", "--sarif", "--metrics", "off",
+         "--disable-version-check", "--config", _semgrep_config(), target]
+    )
+    if rc not in (0, 1):
+        if not out.strip():
+            raise ToolError(f"semgrep failed (rc={rc}): {err.strip()[:200]}")
+    if not out.strip():
+        return []
+    try:
+        sarif = json.loads(out)
+    except json.JSONDecodeError as e:
+        raise ToolError(f"semgrep emitted unparseable SARIF: {e}")
+
+    findings = []
+    for run in sarif.get("runs", []) or []:
+        # Build ruleId → security-severity score map from rule metadata.
+        rule_sev = {}
+        driver = (run.get("tool") or {}).get("driver") or {}
+        for rule in driver.get("rules", []) or []:
+            score = (rule.get("properties") or {}).get("security-severity")
+            mapped = _cvss_to_severity(score)
+            if mapped:
+                rule_sev[rule.get("id")] = mapped
+        for r in run.get("results", []) or []:
+            rid = r.get("ruleId", "semgrep-rule")
+            sev = rule_sev.get(rid) or _level_to_severity(r.get("level", "warning"))
+            msg = (r.get("message") or {}).get("text", rid)
+            path, line = _first_location(r)
+            findings.append(Finding(
+                rule_id=rid,
+                severity=sev,
+                message=msg,
+                driver="semgrep",
+                tier=TIER_DETERMINISTIC,
+                path=_rel(path, target) if path else None,
+                line=line,
+            ))
+    return findings
+
+
+def run_dep_scan(target):
+    """dep-scan supply-chain analysis (the native `dep-scan` binary).
+
+    Version-bearing manifests (package-lock.json, requirements*.txt, Cargo.lock,
+    go.sum) are scanned in **lockfile mode** (`--lockfile … --lockfile-type …`),
+    which is version-aware and catches pinned-version CVEs. Manifests without
+    versions (package.json with no lock, pyproject.toml) fall back to name-based
+    checks. Returns list[Finding]. Verdicts: block → HIGH, warn → MEDIUM
+    (scan-commands.md). Note: `gods` is dep-scan's `go`-command wrapper, not a
+    general check invoker — we call `dep-scan` directly.
+    """
+    if not _have("dep-scan"):
+        return None
+
+    findings = []
+    for kind, path, is_lockfile in _find_dep_manifests(target):
+        if is_lockfile:
+            cmd = ["dep-scan", "check", "--lockfile", path,
+                   "--lockfile-type", _LOCKFILE_TYPE[kind], "--json"]
+        else:
+            names = _read_dep_names(kind, path)
+            if not names:
+                continue
+            cmd = ["dep-scan", "check", *names,
+                   "--registry", _REGISTRY[kind], "--json"]
+        rc, out, err = _run(cmd, cwd=target)
+        # dep-scan exits non-zero when a policy is violated; that is a finding,
+        # not a tool error. Only treat empty-output non-zero as a real failure.
+        if rc not in (0, 1) and not out.strip():
+            raise ToolError(f"dep-scan failed (rc={rc}) on {path}: {err.strip()[:160]}")
+        if not out.strip():
+            continue
+        try:
+            data = json.loads(out)
+        except json.JSONDecodeError as e:
+            raise ToolError(f"dep-scan emitted unparseable JSON for {path}: {e}")
+        for entry in _dep_scan_entries(data):
+            name = entry.get("package") or entry.get("name", "?")
+            ver = entry.get("version", "")
+            # Gate ONLY on attributable policy violations. A bare block/warn with
+            # no policy detail is a dep-scan cache sentinel (version "cached",
+            # empty policies) — not reproducible, so it must not gate.
+            violating = [p for p in (entry.get("policies") or [])
+                         if (p.get("result") or "").lower() in ("block", "warn")]
+            if not violating:
+                top = (entry.get("result") or "").lower()
+                if top in ("block", "warn"):
+                    print(f"{TOOL_NAME}: dep-scan gave an unattributable '{top}' "
+                          f"for {name} (no policy detail — likely a cache hit); "
+                          f"not gating", file=sys.stderr)
+                continue
+            depth = entry.get("depth")
+            depth_note = f" (transitive, depth {depth})" if depth else ""
+            for pol in violating:
+                sev = "HIGH" if (pol.get("result") or "").lower() == "block" else "MEDIUM"
+                policy = pol.get("policy_name", "supply-chain")
+                reason = pol.get("reason") or entry.get("reason") or policy
+                findings.append(Finding(
+                    rule_id=f"dep-scan/{policy}",
+                    severity=sev,
+                    message=f"{name}{('@' + ver) if ver else ''}: {reason}{depth_note}",
+                    driver="dep-scan",
+                    tier=TIER_DETERMINISTIC,
+                    path=_rel(path, target),
+                ))
+    return findings
+
+
+# dep-scan registry / lockfile-type names (CLI accepts npm, pypi, crates-io, go;
+# lockfile-type accepts npm, pypi, crates, go).
+_REGISTRY = {"npm": "npm", "pypi": "pypi", "crates": "crates-io", "go": "go"}
+_LOCKFILE_TYPE = {"npm": "npm", "pypi": "pypi", "crates": "crates", "go": "go"}
+
+
+def _dep_scan_entries(data):
+    """Normalize dep-scan's two output shapes into a flat list of package entries."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return data.get("results", []) or []
+    return []
+
+
+# --- Best-effort (advisory) tier: the pattern library --------------------------
+# A small, native port of the highest-signal greps from references/scan-commands.md.
+# These are heuristic; per ADR-001/REQ-003 they are ADVISORY (note/warning) and
+# NEVER gate, regardless of severity.
+
+PATTERN_RULES = [
+    # (rule_id, severity, compiled regex, message)
+    ("pattern/download-and-execute", "CRITICAL",
+     re.compile(r"curl.+\|.+sh|wget.+\|.+sh|bash\s*<\(curl|IEX.+Download|fetch.+exec"),
+     "Download-and-execute: remote code fetched and piped to a shell"),
+    ("pattern/reverse-shell", "CRITICAL",
+     re.compile(r"/dev/tcp|/dev/udp|nc\s+-e|ncat.*-e|socat.*exec|bash\s+-i|sh\s+-i"),
+     "Reverse shell / C2 indicator"),
+    ("pattern/obfuscation", "HIGH",
+     re.compile(r"eval\(base64|exec\(base64|atob\(|fromCharCode|\\x[0-9a-f]{2}"),
+     "Obfuscated payload (encoded string passed to eval/exec)"),
+    ("pattern/cloud-metadata", "HIGH",
+     re.compile(r"169\.254\.169\.254|metadata\.google\.internal|metadata\.azure\.com"),
+     "Cloud metadata endpoint access (possible credential theft)"),
+    ("pattern/credential-harvest", "MEDIUM",
+     re.compile(r"HOME.*\.ssh|\.aws/credentials|\.netrc|id_rsa|id_ed25519"),
+     "Credential-file access pattern"),
+]
+
+# Files we never walk.
+_SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cache"}
+_TEXT_EXT = {".py", ".js", ".ts", ".jsx", ".tsx", ".sh", ".bash", ".zsh", ".rb",
+             ".go", ".rs", ".php", ".pl", ".ps1", ".yml", ".yaml", ".json",
+             ".toml", ".cfg", ".md", ".txt", ".env", ".mjs", ".cjs", ""}
+
+
+def run_pattern_scan(target):
+    """Native pattern grep → ADVISORY findings (tier best-effort)."""
+    findings = []
+    for root, dirs, files in os.walk(target):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fn in files:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext not in _TEXT_EXT:
+                continue
+            fpath = os.path.join(root, fn)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
+                    for lineno, text in enumerate(fh, 1):
+                        for rid, sev, rx, msg in PATTERN_RULES:
+                            if rx.search(text):
+                                findings.append(Finding(
+                                    rule_id=rid,
+                                    severity=sev,
+                                    message=f"{msg}: {text.strip()[:120]}",
+                                    driver="code-scanner-patterns",
+                                    tier=TIER_BEST_EFFORT,
+                                    path=_rel(fpath, target),
+                                    line=lineno,
+                                ))
+            except (OSError, UnicodeError):
+                continue
+    return findings
+
+
+# --- small utilities -----------------------------------------------------------
+
+def _level_to_severity(level):
+    return {"error": "HIGH", "warning": "MEDIUM", "note": "LOW"}.get(level, "MEDIUM")
+
+
+def _rel(path, target):
+    """Relativize an ABSOLUTE path to the scan target; leave relative paths as-is.
+
+    Real tools emit absolute paths; some (and our fakes) emit paths already
+    relative to the manifest — those must not be re-relativized.
+    """
+    if not path or not os.path.isabs(path):
+        return path
+    try:
+        return os.path.relpath(path, target)
+    except ValueError:
+        return path
+
+
+def _first_location(result):
+    locs = result.get("locations") or []
+    if not locs:
+        return None, None
+    phys = (locs[0].get("physicalLocation") or {})
+    uri = (phys.get("artifactLocation") or {}).get("uri")
+    line = (phys.get("region") or {}).get("startLine")
+    return uri, line
+
+
+def _find_dep_manifests(target):
+    """Return [(kind, path, is_lockfile)] mirroring scan-commands.md.
+
+    is_lockfile=True ⇒ version-bearing, scanned in dep-scan lockfile mode
+    (version-aware). False ⇒ name-only manifest, scanned by declared names.
+    """
+    out = []
+    for root, dirs, files in os.walk(target):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        fset = set(files)
+        if "package-lock.json" in fset:
+            out.append(("npm", os.path.join(root, "package-lock.json"), True))
+        elif "package.json" in fset:
+            out.append(("npm", os.path.join(root, "package.json"), False))
+        for req in files:
+            if re.fullmatch(r"requirements(-.*|_.*)?\.txt", req):
+                out.append(("pypi", os.path.join(root, req), True))
+        if "pyproject.toml" in fset:
+            out.append(("pypi", os.path.join(root, "pyproject.toml"), False))
+        if "Cargo.lock" in fset:
+            out.append(("crates", os.path.join(root, "Cargo.lock"), True))
+        if "go.sum" in fset:
+            out.append(("go", os.path.join(root, "go.sum"), True))
+    return out
+
+
+def _read_dep_names(kind, path):
+    """Extract declared dependency names for a name-based (non-lockfile) call."""
+    names = []
+    try:
+        if kind == "npm" and path.endswith("package.json"):
+            with open(path, encoding="utf-8") as fh:
+                pj = json.load(fh)
+            for section in ("dependencies", "devDependencies"):
+                names += list((pj.get(section) or {}).keys())
+        elif kind == "pypi" and path.endswith(".txt"):
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith(("#", "-")):
+                        continue
+                    names.append(re.split(r"[>=<!\[\s]", line, maxsplit=1)[0])
+        elif kind == "pypi" and path.endswith("pyproject.toml"):
+            with open(path, encoding="utf-8") as fh:
+                body = fh.read()
+            m = re.search(r"^dependencies\s*=\s*\[(.*?)\]", body, re.S | re.M)
+            if m:
+                names += re.findall(r'"([A-Za-z0-9_.-]+)', m.group(1))
+    except (OSError, ValueError):
+        return []
+    return [n for n in names if n]
+
+
+# --- SARIF serialization (ADR-001) ---------------------------------------------
+
+def build_sarif(findings, target, ran=None):
+    """One SARIF run per driver; each run tagged with its reliability tier.
+
+    `ran` is an ordered list of (driver, tier) for every tool that EXECUTED, so
+    the SARIF documents coverage even when a tool found nothing (a clean scan
+    still records which drivers ran — important for the gate's audit trail).
+    """
+    by_driver = {}
+    for f in findings:
+        by_driver.setdefault(f.driver, []).append(f)
+
+    # Seed driver→tier from the tools that ran, then merge in any with findings.
+    driver_tier = {}
+    for driver, tier in (ran or []):
+        driver_tier.setdefault(driver, tier)
+    for driver, items in by_driver.items():
+        driver_tier.setdefault(driver, items[0].tier)
+
+    runs = []
+    for driver in sorted(driver_tier):
+        tier = driver_tier[driver]
+        items = by_driver.get(driver, [])
+        rules = {}
+        results = []
+        for f in items:
+            if f.rule_id not in rules:
+                rule = {"id": f.rule_id, "name": f.rule_id}
+                if f.help_uri:
+                    rule["helpUri"] = f.help_uri
+                rules[f.rule_id] = rule
+            res = {
+                "ruleId": f.rule_id,
+                "level": f.level,
+                "message": {"text": f.message},
+                "properties": {
+                    "severity": f.severity,
+                    "tier": tier,
+                    "security-severity": SEV_TO_SECURITY_SEVERITY[f.severity],
+                },
+            }
+            if f.path:
+                phys = {"artifactLocation": {"uri": f.path}}
+                if f.line:
+                    phys["region"] = {"startLine": f.line}
+                res["locations"] = [{"physicalLocation": phys}]
+            results.append(res)
+        runs.append({
+            "tool": {"driver": {
+                "name": driver,
+                "informationUri": "https://github.com/tkdtaylor/code-scanner",
+                "version": __version__,
+                "rules": list(rules.values()),
+            }},
+            "properties": {
+                "codeScannerTier": tier,
+                "gating": tier == TIER_DETERMINISTIC,
+            },
+            "results": results,
+        })
+
+    return {
+        "version": "2.1.0",
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "runs": runs,
+    }
+
+
+_VALID_LEVELS = {"error", "warning", "note", "none"}
+
+
+def validate_sarif(sarif):
+    """Stdlib-only structural check of the SARIF we built (no jsonschema dep).
+
+    Returns a list of problem strings; empty == valid. Guards against emitting
+    malformed SARIF that a strict consumer (agent-builder's audit seam, GitHub
+    code scanning) would reject. This validates OUR own output, so any problem is
+    an internal bug — the caller fails closed rather than shipping bad SARIF.
+    """
+    problems = []
+    if not isinstance(sarif, dict):
+        return ["top level is not an object"]
+    if sarif.get("version") != "2.1.0":
+        problems.append(f"version must be '2.1.0', got {sarif.get('version')!r}")
+    runs = sarif.get("runs")
+    if not isinstance(runs, list):
+        return problems + ["'runs' must be a list"]
+    for i, run in enumerate(runs):
+        where = f"runs[{i}]"
+        driver = ((run.get("tool") or {}).get("driver") or {})
+        if not isinstance(driver.get("name"), str) or not driver["name"]:
+            problems.append(f"{where}.tool.driver.name missing or empty")
+        rule_ids = set()
+        for j, rule in enumerate(driver.get("rules", []) or []):
+            rid = rule.get("id")
+            if not isinstance(rid, str) or not rid:
+                problems.append(f"{where}.tool.driver.rules[{j}].id missing")
+            else:
+                rule_ids.add(rid)
+        results = run.get("results")
+        if not isinstance(results, list):
+            problems.append(f"{where}.results must be a list")
+            continue
+        for k, res in enumerate(results):
+            rwhere = f"{where}.results[{k}]"
+            if not isinstance(res.get("ruleId"), str) or not res["ruleId"]:
+                problems.append(f"{rwhere}.ruleId missing or empty")
+            if res.get("level") not in _VALID_LEVELS:
+                problems.append(f"{rwhere}.level invalid: {res.get('level')!r}")
+            if not isinstance((res.get("message") or {}).get("text"), str):
+                problems.append(f"{rwhere}.message.text missing")
+            for loc in res.get("locations", []) or []:
+                uri = (((loc.get("physicalLocation") or {})
+                        .get("artifactLocation") or {}).get("uri"))
+                if uri is not None and not isinstance(uri, str):
+                    problems.append(f"{rwhere}.locations[].uri must be a string")
+    return problems
+
+
+# --- CLI -----------------------------------------------------------------------
+
+HELP_EPILOG = """\
+Reliability tiers (ADR-001):
+  deterministic  OSV-Scanner / Semgrep / dep-scan native output. GATES the build.
+  best-effort    heuristic pattern library. ADVISORY only (note/warning) — never
+                 fails the gate, regardless of severity.
+
+The gating exit code derives from the deterministic tier ONLY (TASK-001 REQ-003).
+
+Execution model (ADR-002): deterministic tools run as native binaries on PATH —
+no Docker/Podman socket. Provision osv-scanner, semgrep, and dep-scan on PATH;
+missing tools reduce coverage, and zero available tools is a fail-closed tool
+failure. Semgrep uses a pinned, bundled, offline ruleset by default (no registry
+fetch) so the gate is reproducible; override with --semgrep-config. osv-scanner
+and dep-scan still query their CVE/registry APIs over the network.
+
+Exit codes:
+  0   clean — no gating findings at/above the severity threshold
+  1   gating findings present (deterministic tier)
+  2   tool/setup failure — a tool errored, or no deterministic tool was available
+  64  usage error
+"""
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog=TOOL_NAME,
+        description="Headless gate-mode security scan: exit code + SARIF.",
+        epilog=HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("target", nargs="?", default=".",
+                        help="path to scan (default: current directory)")
+    parser.add_argument("--sarif", metavar="PATH",
+                        help="write SARIF to PATH (default: stdout)")
+    parser.add_argument("--severity-threshold", default="HIGH", metavar="LEVEL",
+                        help="gating floor: CRITICAL, HIGH, MEDIUM, LOW, or INFO "
+                             "(or a comma list; the lowest wins). Default: HIGH "
+                             "(CRITICAL+HIGH gate).")
+    parser.add_argument("--semgrep-config", metavar="SPEC",
+                        help="Semgrep ruleset: a path or a semgrep spec (e.g. "
+                             "p/ci). Default: the bundled offline ruleset "
+                             "(reproducible). Also CODE_SCANNER_SEMGREP_CONFIG.")
+    parser.add_argument("--version", action="version",
+                        version=f"{TOOL_NAME} {__version__}")
+    args = parser.parse_args(argv)
+
+    global SEMGREP_CONFIG_OVERRIDE
+    SEMGREP_CONFIG_OVERRIDE = args.semgrep_config
+
+    target = os.path.abspath(args.target)
+    if not os.path.isdir(target):
+        print(f"{TOOL_NAME}: target is not a directory: {args.target}",
+              file=sys.stderr)
+        return EXIT_USAGE
+
+    threshold_rank = _parse_threshold(args.severity_threshold)
+    if threshold_rank is None:
+        print(f"{TOOL_NAME}: invalid --severity-threshold: "
+              f"{args.severity_threshold}", file=sys.stderr)
+        return EXIT_USAGE
+
+    # --- run the deterministic tier ---
+    deterministic_runners = [
+        ("osv-scanner", run_osv_scanner),
+        ("semgrep", run_semgrep),
+        ("dep-scan", run_dep_scan),
+    ]
+    findings = []
+    ran = []  # ordered (driver, tier) for every tool that executed
+    skipped = []
+    try:
+        for name, fn in deterministic_runners:
+            result = fn(target)
+            if result is None:
+                skipped.append(name)
+                print(f"{TOOL_NAME}: {name} not on PATH — coverage reduced",
+                      file=sys.stderr)
+            else:
+                ran.append((name, TIER_DETERMINISTIC))
+                findings.extend(result)
+    except ToolError as e:
+        print(f"{TOOL_NAME}: tool failure: {e}", file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+
+    if not any(tier == TIER_DETERMINISTIC for _, tier in ran):
+        print(f"{TOOL_NAME}: no deterministic tool available "
+              f"(need one of osv-scanner / semgrep / dep-scan) — "
+              f"cannot certify, failing closed", file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+
+    # --- advisory tier (never gates) ---
+    findings.extend(run_pattern_scan(target))
+    ran.append(("code-scanner-patterns", TIER_BEST_EFFORT))
+
+    # --- build + self-validate SARIF (fail closed on malformed output) ---
+    sarif = build_sarif(findings, target, ran)
+    problems = validate_sarif(sarif)
+    if problems:
+        print(f"{TOOL_NAME}: internal error — produced invalid SARIF, refusing "
+              f"to emit:", file=sys.stderr)
+        for p in problems[:10]:
+            print(f"  - {p}", file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+
+    # --- emit SARIF ---
+    sarif_text = json.dumps(sarif, indent=2)
+    if args.sarif:
+        try:
+            with open(args.sarif, "w", encoding="utf-8") as fh:
+                fh.write(sarif_text + "\n")
+        except OSError as e:
+            print(f"{TOOL_NAME}: cannot write SARIF to {args.sarif}: {e}",
+                  file=sys.stderr)
+            return EXIT_TOOL_FAILURE
+    else:
+        print(sarif_text)
+
+    # --- decide exit code (deterministic tier only) ---
+    gating = [f for f in findings if f.gates(threshold_rank)]
+    advisory = [f for f in findings if f.tier == TIER_BEST_EFFORT]
+    _print_summary(gating, advisory, skipped, args.severity_threshold)
+    return EXIT_FINDINGS if gating else EXIT_CLEAN
+
+
+def _parse_threshold(value):
+    ranks = []
+    for part in value.split(","):
+        p = part.strip().upper()
+        if p not in SEV_RANK:
+            return None
+        ranks.append(SEV_RANK[p])
+    if not ranks:
+        return None
+    return max(ranks)  # the lowest severity in the set = the floor
+
+
+def _print_summary(gating, advisory, skipped, threshold):
+    n_gate = len(gating)
+    print(f"{TOOL_NAME}: {n_gate} gating finding(s) at/above {threshold} "
+          f"(deterministic tier); {len(advisory)} advisory pattern finding(s).",
+          file=sys.stderr)
+    if skipped:
+        print(f"{TOOL_NAME}: tools not run (coverage gaps): {', '.join(skipped)}",
+              file=sys.stderr)
+    for f in gating:
+        loc = f"{f.path}:{f.line}" if f.line else (f.path or "-")
+        print(f"  [{f.severity}] {f.driver} {f.rule_id} ({loc}) {f.message[:100]}",
+              file=sys.stderr)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
