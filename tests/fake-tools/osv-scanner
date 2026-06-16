@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+# Hermetic fake `osv-scanner` for the L5 test harness. Emits real-shape OSV JSON.
+# Keys off whether the scanned path is the vulnerable fixture. Exits 1 when it
+# reports a vulnerability (matching real osv-scanner), 0 when clean.
+import json
+import os
+import sys
+
+ctx = " ".join(sys.argv) + " " + os.getcwd()
+is_vuln = "vulnerable" in ctx
+
+if is_vuln:
+    print(json.dumps({
+        "results": [{
+            "source": {"path": "requirements.txt", "type": "lockfile"},
+            "packages": [{
+                "package": {"name": "pyyaml", "version": "5.3.1",
+                            "ecosystem": "PyPI"},
+                "vulnerabilities": [{
+                    "id": "CVE-2020-14343",
+                    "summary": "Arbitrary code execution in PyYAML via full_load",
+                    "severity": [{"type": "CVSS_V3", "score": "9.8"}],
+                    "database_specific": {"severity": "CRITICAL"},
+                }],
+            }],
+        }],
+    }))
+    sys.exit(1)
+else:
+    print(json.dumps({"results": []}))
+    sys.exit(0)

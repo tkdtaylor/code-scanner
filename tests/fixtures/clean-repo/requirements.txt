@@ -1,0 +1,4 @@
+# A benign, pinned dependency set. The fake/real deterministic tier reports
+# nothing for these — the clean twin of vulnerable-repo.
+requests==2.32.3
+click==8.1.7
