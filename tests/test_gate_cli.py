@@ -11,6 +11,8 @@ Two tiers of test:
 Run: python3 -m pytest tests/test_gate_cli.py -v
 """
 
+import importlib.machinery
+import importlib.util
 import json
 import os
 import shutil
@@ -20,6 +22,21 @@ import sys
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _load_cli_module():
+    """Import the extensionless `cli/code-scanner` shim as a module."""
+    path = os.path.join(REPO, "cli", "code-scanner")
+    spec = importlib.util.spec_from_file_location(
+        "code_scanner_cli", path,
+        loader=importlib.machinery.SourceFileLoader("code_scanner_cli", path),
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+cs = _load_cli_module()
 CLI = os.path.join(REPO, "cli", "code-scanner")
 FIXTURES = os.path.join(REPO, "tests", "fixtures")
 FAKE_TOOLS = os.path.join(REPO, "tests", "fake-tools")
@@ -195,6 +212,52 @@ def test_no_deterministic_tools_is_tool_failure():
 def test_nonexistent_target_is_usage_error():
     rc, _, _ = run_cli("/nonexistent/path/xyzzy", path=fake_path())
     assert rc == EXIT_USAGE
+
+
+# --- SARIF self-validation -----------------------------------------------------
+
+def test_emitted_sarif_validates_for_both_fixtures():
+    for target in (CLEAN, VULN):
+        _, sarif, _ = run_cli(target, path=fake_path())
+        assert sarif is not None
+        assert cs.validate_sarif(sarif) == [], f"{target} emitted invalid SARIF"
+        assert sarif["version"] == "2.1.0"
+
+
+def test_built_sarif_validates():
+    findings = [
+        cs.Finding("CVE-2099-1", "CRITICAL", "boom", "osv-scanner",
+                   cs.TIER_DETERMINISTIC, path="requirements.txt"),
+        cs.Finding("pattern/x", "HIGH", "curl|bash", "code-scanner-patterns",
+                   cs.TIER_BEST_EFFORT, path="x.sh", line=3),
+    ]
+    sarif = cs.build_sarif(findings, REPO,
+                           ran=[("osv-scanner", cs.TIER_DETERMINISTIC),
+                                ("code-scanner-patterns", cs.TIER_BEST_EFFORT)])
+    assert cs.validate_sarif(sarif) == []
+
+
+def test_validator_catches_malformed():
+    bad = {
+        "version": "1.0.0",  # wrong version
+        "runs": [{
+            "tool": {"driver": {"name": ""}},        # empty driver name
+            "results": [
+                {"ruleId": "", "level": "fatal",      # bad ruleId + bad level
+                 "message": {}},                       # missing message.text
+            ],
+        }],
+    }
+    problems = cs.validate_sarif(bad)
+    assert any("version" in p for p in problems)
+    assert any("driver.name" in p for p in problems)
+    assert any("ruleId" in p for p in problems)
+    assert any("level" in p for p in problems)
+    assert any("message.text" in p for p in problems)
+
+
+def test_validator_accepts_empty_runs():
+    assert cs.validate_sarif({"version": "2.1.0", "runs": []}) == []
 
 
 # --- opt-in real-tools integration ---------------------------------------------
