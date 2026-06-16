@@ -1,7 +1,7 @@
 # ADR-001 — Adopt SARIF as the machine-readable findings format
 
-**Status:** Proposed
-**Date:** 2026-06-03
+**Status:** Accepted
+**Date:** 2026-06-03 (accepted 2026-06-16)
 **Deciders:** code-scanner maintainer
 
 > This is the first ADR in code-scanner; it also establishes the
@@ -61,3 +61,6 @@ the skill's non-determinism. The SARIF file should mark which results came from 
 
 - SARIF 2.1.0 (OASIS standard)
 - Ecosystem standards table: `agent-prep/outputs/foundations/interface-contracts.md` §1a
+- First realization: TASK-001 (headless CLI gate mode) emits this SARIF; ADR-002 defines its
+  socket-less execution model. The two-tier reliability model here is load-bearing there — the
+  gating exit code derives from the deterministic tier only.

@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+# Hermetic fake `dep-scan` for the L5 test harness. Emits the name-based array
+# shape. `block` verdict on the vulnerable fixture, empty array when clean.
+import json
+import os
+import sys
+
+ctx = " ".join(sys.argv) + " " + os.getcwd()
+is_vuln = "vulnerable" in ctx
+
+if is_vuln:
+    reason = "Found known vulnerability(ies): GHSA-8q59-q68h-6hv4, PYSEC-2021-142"
+    print(json.dumps([{
+        "package": "PyYAML", "version": "5.3.1", "registry": "pypi",
+        "result": "block", "reason": reason,
+        "policies": [
+            {"policy_name": "age", "result": "pass", "reason": None},
+            {"policy_name": "vulnerability", "result": "block", "reason": reason},
+        ],
+    }]))
+    sys.exit(1)
+else:
+    print(json.dumps([]))
+    sys.exit(0)
