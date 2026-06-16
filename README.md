@@ -106,6 +106,29 @@ You can see sample reports here: [SAFE — BHIL toolkit](./sample-reports/scan-r
 DO NOT INSTALL — ...
 ```
 
+## Headless CLI (gate mode)
+
+Alongside the conversational skill there is a deterministic, non-interactive
+**`code-scanner` CLI** for CI / verification-gate use — it emits a process **exit
+code** and machine-readable **SARIF** instead of a Markdown report, so a build gate
+or another program can branch on it. The skill surface is unchanged; this is an
+additional entrypoint.
+
+```bash
+code-scanner [TARGET]            # default: current directory
+code-scanner . --sarif out.sarif --severity-threshold HIGH
+# exit 0 = clean · 1 = gating findings · 2 = tool/setup failure · 64 = usage
+```
+
+The gating exit code derives from the **deterministic tier only** (OSV-Scanner /
+Semgrep / dep-scan); heuristic pattern findings are advisory. It runs the tools as
+native binaries on `PATH` with **no Docker/Podman socket** (so it mounts into a
+rootless gate-tools dir). See **[cli/README.md](./cli/README.md)** for the full
+contract, runtime deps, and the containerized integration runner, and
+[ADR-001](./docs/architecture/decisions/001-adopt-sarif-findings-format.md) /
+[ADR-002](./docs/architecture/decisions/002-sandbox-in-gate-execution-model.md)
+for the design decisions.
+
 ## Installation
 
 > **Prerequisite:** Docker must be installed and running. See the requirement note at the top of this page.
@@ -204,6 +227,14 @@ code-scanner/           ← skill folder (upload this)
     ├── patterns.md        ← malicious pattern reference library
     ├── scan-commands.md   ← Docker run commands for each scan step
     └── report-template.md ← output format template
+
+cli/                    ← headless CLI gate mode (exit code + SARIF)
+├── code-scanner        ← the executable on PATH (stdlib-only Python shim)
+├── semgrep-rules/      ← bundled, pinned, offline Semgrep ruleset
+└── README.md           ← CLI contract, exit codes, runtime deps
+
+docs/architecture/decisions/  ← ADRs (001 SARIF format, 002 gate execution model)
+tests/                  ← L5 fixtures + hermetic and real-tools test suites
 ```
 
 ## How the Docker sandbox works
