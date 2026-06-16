@@ -2,4 +2,3 @@
 # CVSS 9.8 CRITICAL. The deterministic tier (OSV-Scanner / dep-scan) flags this
 # — it is the GATING finding the L5 test asserts on.
 pyyaml==5.3.1
-requests==2.32.3

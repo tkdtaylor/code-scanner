@@ -82,10 +82,23 @@ def fake_path():
     return os.pathsep.join([FAKE_TOOLS, interp, "/usr/bin", "/bin"])
 
 
+_MINIMAL_DIR = None
+
+
 def minimal_path():
-    """A PATH with NO scanner tools (only interpreter), for the tool-failure case."""
-    interp = os.path.dirname(sys.executable)
-    return os.pathsep.join([interp, "/usr/bin", "/bin"])
+    """A PATH with NO scanner tools at all, for the tool-failure case.
+
+    An isolated dir holding only a `python3` symlink — deliberately NOT the
+    interpreter's own dir, because in the container image the scanner tools live
+    in /usr/local/bin alongside python3 and would leak in.
+    """
+    global _MINIMAL_DIR
+    if _MINIMAL_DIR is None:
+        import tempfile
+        d = tempfile.mkdtemp(prefix="cs-nopath-")
+        os.symlink(sys.executable, os.path.join(d, "python3"))
+        _MINIMAL_DIR = d
+    return _MINIMAL_DIR
 
 
 def all_results(sarif):
