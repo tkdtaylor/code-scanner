@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """L5 validation harness for the headless `code-scanner` gate CLI (TASK-001).
 
 Two tiers of test:

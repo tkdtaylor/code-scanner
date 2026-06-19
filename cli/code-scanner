@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 # code-scanner — headless CLI gate mode
 #
 # A deterministic, non-interactive scanner entrypoint for CI / verification-gate
