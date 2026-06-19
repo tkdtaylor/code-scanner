@@ -303,14 +303,27 @@ No Docker volume, no download, no temp directory, no export, no cleanup. Only `g
 
 ## Contributing
 
-Issues and PRs welcome.
+Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Contributions are accepted under Apache-2.0 via the Developer Certificate of Origin (DCO): sign off your commits with `git commit -s`. No CLA required.
 
 ## License
 
-This project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+code-scanner is licensed under the **Apache License 2.0** — free to use, modify, and distribute, including in commercial and proprietary products. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-**Free for:** personal use, research, education, hobby projects, charitable and government organisations.
-
-**Commercial use** (companies, paid products, internal business tooling) requires a separate commercial license. Contact: kevin@taylorguard.me
+> **Security notice:** code-scanner is a security tool provided **as-is, without warranty**. It does not guarantee the security of any system. See the disclaimer in [NOTICE](NOTICE).
 
 Third-party ideas and threat indicators incorporated into the pattern library are credited in [ATTRIBUTIONS.md](ATTRIBUTIONS.md).
+
+## Enterprise Support
+
+Need hardened deployments, integration help, custom detection patterns, or a support SLA? **Commercial support and consulting are available.**
+
+📧 Contact **[tools@taylorguard.me](mailto:tools@taylorguard.me)**
+
+Apache-2.0 means you can build on code-scanner freely — paid support is there if you want a partner, never a requirement to use it.
+
+## Sponsorship
+
+code-scanner is independent, open-source security tooling. If it saves you time or risk, consider sponsoring continued development:
+
+- 💜 [GitHub Sponsors](https://github.com/sponsors/tkdtaylor)
+<!-- - 🤝 [Open Collective](https://opencollective.com/code-scanner)  (uncomment once the collective exists) -->

@@ -1,6 +1,6 @@
 # code-scanner — bundled Semgrep ruleset (pinned, offline, deterministic).
 #
-# Original rules authored for code-scanner, License: PolyForm Noncommercial 1.0.0
+# Original rules authored for code-scanner, licensed Apache-2.0 (see repo LICENSE)
 # (see repo LICENSE). A small, high-signal set so the deterministic Semgrep tier
 # runs fully offline (no `--config auto` registry fetch) and reproducibly — the
 # gate's exit code must not depend on registry rules drifting over time.

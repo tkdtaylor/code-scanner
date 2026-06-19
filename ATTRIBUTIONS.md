@@ -1,6 +1,6 @@
 # Attributions
 
-Code Scanner is original work licensed under the PolyForm Noncommercial License 1.0.0
+Code Scanner is original work licensed under the Apache License 2.0
 (see [LICENSE](LICENSE)). It incorporates ideas and publicly-known threat indicators
 from the third-party sources below. No source code from these projects is copied into
 this repository; the detection logic here is written independently for this skill.

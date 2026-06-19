@@ -13,7 +13,7 @@
 # Single-file, stdlib-only, shebang shim: `cp` it into a gate-tools dir and mount
 # it into a rootless execution-box exactly like dep-scan's `gods` (REQ-006).
 #
-# License: PolyForm Noncommercial 1.0.0 (see repo LICENSE).
+# Licensed under Apache-2.0 (see repo LICENSE).
 
 """Headless gate-mode scanner: exit code + SARIF from the deterministic tier."""
 
