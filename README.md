@@ -82,6 +82,17 @@ Add `--security-review` to any phrase to force the Claude Code security review s
 - **Rogue agent** — self-modifying skills and unauthorized cross-session persistence (the "rug pull")
 - **MCP server threats** — tool-description poisoning, over-broad capability scope, and runtime-mutable (rug-pull-capable) tool manifests
 
+## Scope
+
+**What code-scanner does:** an instruction-driven scanner (Claude Skill + headless CI gate) that inspects repos, packages, and skill files for malware patterns and supply-chain indicators — using a disposable sandbox so target code never executes on the host.
+
+**What it does *not* do (and which sibling owns it instead):**
+- Maintain a CVE / dependency-vulnerability database — it orchestrates **dep-scan** / OSV-Scanner for that
+- Provide runtime execution isolation for the code it scans → **exec-sandbox**
+- Defend the runtime prompt / output / tool-call path → **armor**
+
+`code-scanner` is one block in a composable secure-agent ecosystem — each block is standalone and independently usable, and composes with its siblings over published contracts rather than absorbing their responsibilities (no central "god object").
+
 ## Output
 
 You can see sample reports here: [SAFE — BHIL toolkit](./sample-reports/scan-report-20260322.md) · [CRITICAL — obfuscated backdoor + private key exfiltration](./sample-reports/scan-report-20260330.md). The skill writes a Markdown report to `./code-scanner-reports/scan-report-YYYYMMDD-HHMMSS.md`:
@@ -326,4 +337,3 @@ Apache-2.0 means you can build on code-scanner freely — paid support is there 
 code-scanner is independent, open-source security tooling. If it saves you time or risk, consider sponsoring continued development:
 
 - 💜 [GitHub Sponsors](https://github.com/sponsors/tkdtaylor)
-<!-- - 🤝 [Open Collective](https://opencollective.com/code-scanner)  (uncomment once the collective exists) -->
