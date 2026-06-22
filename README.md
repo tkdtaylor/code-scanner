@@ -7,7 +7,7 @@ A portable [Agent Skill](https://www.anthropic.com/news/agent-skills) that scans
 > [!IMPORTANT]
 > **Docker is required for remote targets** (GitHub URLs, archives, PyPI/npm packages). When the target is a remote source, it is downloaded into a disposable Docker volume — nothing from the target repo ever touches the host filesystem, and the entire sandbox is destroyed when the scan completes.
 >
-> **Local paths scan natively without Docker.** If you point the scanner at a folder already on your disk (a cloned repo, a skill folder, a downloaded project), it skips the sandbox entirely and runs read-only text analysis (`grep`, `find`) in place. The sandbox exists to prevent execution of *downloaded* code; files already on your machine have already been there, and reading them with text tools does not execute them. OSV Scanner and dep-scan still use Docker as a tool runner in local mode (via a read-only bind mount), but you can skip both if you don't need dependency checks.
+> **Local paths scan natively without Docker.** If you point the scanner at a folder already on your disk (a cloned repo, a skill folder, a downloaded project), it skips the sandbox entirely and runs read-only text analysis (`grep`, `find`) in place. The sandbox exists to prevent execution of *downloaded* code; files already on your machine have already been there, and reading them with text tools does not execute them. OSV Scanner and [dep-scan](https://github.com/tkdtaylor/dep-scan) still use Docker as a tool runner in local mode (via a read-only bind mount), but you can skip both if you don't need dependency checks.
 >
 > | Platform | Install |
 > |---|---|
@@ -88,8 +88,8 @@ Add `--security-review` to any phrase to force the Claude Code security review s
 
 **What it does *not* do (and which sibling owns it instead):**
 - Maintain a CVE / dependency-vulnerability database — it orchestrates **dep-scan** / OSV-Scanner for that
-- Provide runtime execution isolation for the code it scans → **exec-sandbox**
-- Defend the runtime prompt / output / tool-call path → **armor**
+- Provide runtime execution isolation for the code it scans → **exec-sandbox** (Coming soon)
+- Defend the runtime prompt / output / tool-call path → **[armor](https://github.com/tkdtaylor/armor)**
 
 `code-scanner` is one block in a composable secure-agent ecosystem — each block is standalone and independently usable, and composes with its siblings over published contracts rather than absorbing their responsibilities (no central "god object").
 
