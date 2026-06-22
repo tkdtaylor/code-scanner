@@ -20,7 +20,7 @@ RUN go install github.com/google/osv-scanner/v2/cmd/osv-scanner@${OSV_SCANNER_VE
 # --- stage 2: the runner --------------------------------------------------------
 FROM python:3.12-slim
 
-ARG DEP_SCAN_VERSION=v1.3.0
+ARG DEP_SCAN_VERSION=v1.3.1
 ARG SEMGREP_VERSION=1.97.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
