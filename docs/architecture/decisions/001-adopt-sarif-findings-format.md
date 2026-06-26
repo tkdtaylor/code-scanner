@@ -16,7 +16,7 @@ report** to `./code-scanner-reports/`. It already orchestrates the OSV database 
 for dependency checks.
 
 It is one block in a composable, security-first agent ecosystem (cross-block design in
-`agent-prep/outputs/foundations/interface-contracts.md`). A cross-cutting principle there:
+the ecosystem's shared interface-contracts reference). A cross-cutting principle there:
 **reuse existing interchange standards rather than invent new formats**, so a block's output is
 interoperable and the block stays swappable.
 
@@ -60,7 +60,7 @@ the skill's non-determinism. The SARIF file should mark which results came from 
 ## References
 
 - SARIF 2.1.0 (OASIS standard)
-- Ecosystem standards table: `agent-prep/outputs/foundations/interface-contracts.md` §1a
+- Ecosystem standards table: the shared interface-contracts reference §1a
 - First realization: TASK-001 (headless CLI gate mode) emits this SARIF; ADR-002 defines its
   socket-less execution model. The two-tier reliability model here is load-bearing there — the
   gating exit code derives from the deterministic tier only.
