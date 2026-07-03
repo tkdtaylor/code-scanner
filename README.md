@@ -1,339 +1,153 @@
-# Code Scanner — A Claude Skill for Malicious Code Detection
+# code-scanner
 
-A portable [Agent Skill](https://www.anthropic.com/news/agent-skills) that scans code repositories, published packages, and Claude skills — including bundled MCP servers — for malicious patterns, suspicious links, and supply-chain attack indicators. Works across Claude Code, GitHub Copilot, Cursor, Windsurf, Kiro, and Google Antigravity.
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/tkdtaylor/code-scanner)](https://github.com/tkdtaylor/code-scanner/commits)
 
-![code-scanner architecture: untrusted code contained inside a secure disposable Docker boundary while scanners produce a Markdown report](assets/code-scanner-architecture.png)
+**A malware scanner for code repositories, packages, and agent skills** — analyzes targets for known CVEs, malicious patterns, supply-chain attacks, and backdoors. Remote targets run inside a disposable Docker sandbox so nothing downloaded touches the host; local paths are scanned in place with read-only analysis. Returns a Markdown report or machine-readable SARIF for CI gates.
 
-> [!IMPORTANT]
-> **Docker is required for remote targets** (GitHub URLs, archives, PyPI/npm packages). When the target is a remote source, it is downloaded into a disposable Docker volume — nothing from the target repo ever touches the host filesystem, and the entire sandbox is destroyed when the scan completes.
->
-> **Local paths scan natively without Docker.** If you point the scanner at a folder already on your disk (a cloned repo, a skill folder, a downloaded project), it skips the sandbox entirely and runs read-only text analysis (`grep`, `find`) in place. The sandbox exists to prevent execution of *downloaded* code; files already on your machine have already been there, and reading them with text tools does not execute them. OSV Scanner and [dep-scan](https://github.com/tkdtaylor/dep-scan) still use Docker as a tool runner in local mode (via a read-only bind mount), but you can skip both if you don't need dependency checks.
->
-> | Platform | Install |
-> |---|---|
-> | Linux | [Docker Engine](https://docs.docker.com/engine/install/) |
-> | macOS | [Docker Desktop](https://docs.docker.com/desktop/install/mac-install/) |
-> | Windows | [Docker Desktop](https://docs.docker.com/desktop/install/windows-install/) with WSL2 |
-> | Docker Sandbox (`sbx`) | Scanning containers run normally inside the microVM. Use the "Balanced" network policy or add `ghcr.io`, `registry-1.docker.io`, `production.cloudflare.docker.com`, `api.github.com`, `pypi.org`, `registry.npmjs.org`, `crates.io`, `proxy.golang.org`, `sum.golang.org`, `api.osv.dev` to your allow list. |
->
-> Verify Docker is running before use: `docker info`
+Works as a Claude Skill (or compatible agent skill in GitHub Copilot, Cursor, Windsurf, Kiro, Antigravity) and as a headless CLI for verification gates. Part of the [Secure Agent Ecosystem](#the-building-blocks), Apache-2.0 licensed.
 
-> [!WARNING]
-> **No automated tool can guarantee that code is safe.** This skill looks for known malicious patterns, but novel, obfuscated, or sufficiently complex threats may go undetected. Use the results as one input alongside your own judgement — not as a definitive safety certificate.
+> **Status.** Code-scanner scans repositories, packages (PyPI / npm), archives, and skill files for malware patterns and supply-chain indicators. The conversational skill path and headless CLI (SARIF + exit codes for gating) are both production. Windows/macOS Docker Sandbox (`sbx`) support is present; integration with agent-builder's gate is live. The Telegram operator channel is planned but not yet wired.
 
-## What it does
+## Contents
 
-Given a GitHub repository URL, a zip archive, a PyPI or npm package name, a Claude skill folder (or `SKILL.md`), or a local path already on disk, this skill instructs Claude to:
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [What it detects](#what-it-detects)
+- [Use as a skill](#use-as-a-skill)
+- [Use as a CLI (gates)](#use-as-a-cli-gates)
+- [Tech stack](#tech-stack)
+- [Sponsorship](#sponsorship)
+- [Enterprise support](#enterprise-support)
+- [License](#license)
 
-1. **Remote targets**: create an isolated Docker volume and download the code into it, stripping all execute permissions. **Local paths**: skip the sandbox entirely and scan the files in place with native `grep`/`find` — no volume, no download, no copy.
-2. Check dependency manifests against the OSV vulnerability database and run dep-scan supply chain analysis — typosquatting, package age, maintainer changes, dependency confusion, missing provenance, plus transitive-tree scanning for lockfile-backed ecosystems (npm, Rust, Go)
-3. Statically analyze the code for malicious patterns (using `--network none` containers in sandbox mode, or native host tools in local mode)
-4. Follow any embedded download URLs and inspect those payloads inside an ephemeral Docker volume
-5. Write a structured Markdown report to `./code-scanner-reports/` on your machine
-6. *(Claude Code only)* If no HIGH or CRITICAL findings were found, run a supplementary review using Claude Code's built-in security analysis and append the results to the report
-7. **Remote targets**: destroy the Docker volume. **Local paths**: nothing to destroy — your files are left untouched.
+## Quick start
 
-## Trigger phrases
+As a **Claude Skill**, trigger it conversationally:
 
-- "Scan this repo and tell me if it's safe to run: `<url>`"
-- "Check if this GitHub repo is malicious: `<url>`"
-- "Is it safe to install this? `<url>`"
-- "Run a security scan on `<url>`"
-- "Scan the PyPI package `litellm==1.82.8` before I install it"
-- "Check the npm package `express@4.18.2` for malware"
-- "Scan this skill before I install it: `<path or url>`"
-- "Is this Claude skill safe to use?"
+```
+User: Scan this repo and tell me if it's safe to run: https://github.com/owner/repo
+```
 
-Add `--security-review` to any phrase to force the Claude Code security review step even if HIGH or CRITICAL findings are present — e.g. `"Scan https://github.com/... --security-review"`.
+Claude will download the repo into a disposable Docker sandbox, check it for CVEs and malware patterns, and write a report to `./code-scanner-reports/scan-report-*.md`. Nothing from the remote repo touches your host.
+
+As a **headless CLI** (for CI / verification gates):
+
+```bash
+code-scanner .                                    # scan current directory
+code-scanner . --sarif out.sarif                 # emit SARIF for gate consumption
+code-scanner https://github.com/owner/repo       # scan remote target
+# exit code: 0 = clean · 1 = findings · 2 = tool error
+```
+
+The skill works in Claude Code, GitHub Copilot (Agent Mode), Cursor, Windsurf, Kiro, and Antigravity. Install by copying `code-scanner/SKILL.md` and `code-scanner/references/` into your agent's skill directory. The CLI requires Python 3 + Docker (or just Python 3 for local-path targets).
+
+## How it works
+
+Two isolation strategies — **remote targets** use a disposable sandbox; **local paths** use native read-only analysis.
+
+```
+Remote target (GitHub URL, package, archive)
+├─ Create Docker volume (isolated from host)
+├─ Download target into volume (execute perms stripped)
+├─ Scan with OSV-Scanner, Semgrep, dep-scan (--network none)
+├─ Follow download URLs, inspect payloads in sandbox
+├─ Write report to host (output only)
+└─ Destroy volume (nothing leaves sandbox)
+
+Local path (folder already on disk)
+├─ Skip sandbox entirely
+├─ Run grep/find against files in place, read-only
+├─ No copy, no download, no volume
+└─ Write report to ./code-scanner-reports/
+```
+
+**Why local mode is safe:** The sandbox prevents *execution* of untrusted code during installation (hooks, setup scripts, postinstall triggers). Read-only text analysis never executes the code it reads. If code is already on your disk, you already accepted the risk of its presence; scanning it with grep adds none.
 
 ## What it detects
 
-**Code repositories, archives, and published packages (PyPI / npm):**
+**Code repositories and packages:**
 
-> **Scanning the GitHub source repo is not the same as scanning the published package.** Supply chain attacks like the March 2026 LiteLLM compromise inject malicious code only into the PyPI/npm artifact while leaving the source repo untouched. Use the `litellm==1.82.8` or `npm:package@version` target formats to scan the actual artifact before installing.
+| Category | Detection |
+|----------|-----------|
+| **CVE / Dependencies** | Known vulnerabilities (OSV database), typosquatting, package age < 48h, maintainer changes, dependency confusion, transitive-tree scanning (npm, Rust, Go lockfiles) |
+| **Malware patterns** | Base64/hex payloads, eval/exec patterns, `curl \| bash`, credential harvesting, reverse shells, cryptominers, web shells, C2 infrastructure, persistence mechanisms |
+| **Supply chain** | Malicious install hooks (postinstall, setup.py, `__init__.py`), Python `.pth` persistence, unpinned CI/CD actions |
+| **Recursive payloads** | Secondary download URLs fetched and inspected inside the sandbox |
 
-- **Known CVEs** — dependency vulnerabilities checked against the [OSV database](https://osv.dev) (via [OSV Scanner](https://github.com/google/osv-scanner))
-- **Dependency supply chain** — typosquatting detection, minimum package age enforcement (< 48h), maintainer change/takeover detection, dependency confusion warnings, malicious install script analysis, obfuscation/low-popularity/missing-provenance signals, and **transitive dependency scanning** of the full tree (not just declared deps) for lockfile-backed ecosystems — npm (`package-lock.json`), Rust (`Cargo.lock`), and Go (`go.sum`). Powered by [dep-scan](https://github.com/tkdtaylor/dep-scan); the image is built automatically on first scan (~30s, downloads a prebuilt release binary — no Rust toolchain needed) and reused thereafter.
-- **Obfuscation** — base64/hex encoded payloads, eval/exec patterns
-- **Download & execute** — `curl | bash`, `wget | sh`, fetching and running remote scripts
-- **Supply chain hooks** — malicious `postinstall`, `setup.py`, `__init__.py` install triggers
-- **Python `.pth` persistence** — executable code in `.pth` files that run on every Python startup (used in the LiteLLM attack)
-- **Credential harvesting** — reading env vars, `.env` files, SSH keys, cloud credentials, cloud instance metadata endpoints (`169.254.169.254`)
-- **Reverse shells** — outbound connection patterns, netcat, socat
-- **Cryptominers** — known miner binaries, pool addresses, and stratum protocol methods
-- **Web shells** — dynamic-input-to-execution sinks in PHP/JSP/ASP (`eval($_POST)` and similar)
-- **Data exfiltration** — sending data to remote endpoints
-- **Suspicious domains/IPs** — hardcoded C2 infrastructure indicators
-- **Persistence mechanisms** — systemd user services, launchd agents, cron injection, SUID bits, sudo abuse
-- **Unpinned CI/CD actions** — third-party GitHub Actions using mutable version tags instead of commit SHAs (the Trivy/LiteLLM attack vector)
-- **Recursive payloads** — secondary download URLs fetched and inspected inside the sandbox
+**Claude skill files:**
 
-**Claude skill files (and bundled MCP servers):**
-- **Prompt injection** — instructions designed to override Claude's behaviour or safety guidelines
-- **Identity manipulation** — attempts to replace Claude's role or claim special permissions
-- **False endorsement** — falsely claiming the skill is verified or authorized by Anthropic
-- **Exfiltration instructions** — directing Claude to send conversation data to remote endpoints
-- **Credential access instructions** — directing Claude to read and expose SSH keys, API keys, `.env` files
-- **Dangerous embedded commands** — harmful shell commands within skill instructions
-- **Trigger / activation abuse** — overly broad, shadowing, or baiting trigger phrases that widen the skill's activation surface
-- **Excessive agency & tool misuse** — autonomous high-impact actions without human-in-the-loop, blanket tool/permission grants, unsafe tool defaults
-- **Memory poisoning** — instructions crafted to persist in agent memory or stuff the context across turns
-- **System-prompt leakage** — attempts to extract Claude's system prompt or hidden instructions
-- **Rogue agent** — self-modifying skills and unauthorized cross-session persistence (the "rug pull")
-- **MCP server threats** — tool-description poisoning, over-broad capability scope, and runtime-mutable (rug-pull-capable) tool manifests
+| Category | Detection |
+|----------|-----------|
+| **Injection** | Prompt injection, system-prompt leakage, instructions designed to override Claude behavior |
+| **Identity** | Falsely claiming verification, attempting to replace Claude's role |
+| **Exfiltration** | Instructions to send data to remote endpoints, credential access directives |
+| **Agency** | Autonomous high-impact actions without human-in-the-loop, blanket tool grants, unsafe defaults |
+| **Rogue agent** | Self-modifying skills, unauthorized cross-session persistence, MCP server threats |
 
-## Scope
+Note: No automated tool guarantees safety. code-scanner detects known patterns; novel or sufficiently obfuscated threats may evade detection. Use results alongside your own judgment.
 
-**What code-scanner does:** an instruction-driven scanner (Claude Skill + headless CI gate) that inspects repos, packages, and skill files for malware patterns and supply-chain indicators — using a disposable sandbox so target code never executes on the host.
+## Use as a skill
 
-**What it does *not* do (and which sibling owns it instead):**
-- Maintain a CVE / dependency-vulnerability database — it orchestrates **dep-scan** / OSV-Scanner for that
-- Provide runtime execution isolation for the code it scans → **[exec-sandbox](https://github.com/tkdtaylor/exec-sandbox)**
-- Defend the runtime prompt / output / tool-call path → **[armor](https://github.com/tkdtaylor/armor)**
-
-`code-scanner` is one block in a composable secure-agent ecosystem — each block is standalone and independently usable, and composes with its siblings over published contracts rather than absorbing their responsibilities (no central "god object").
-
-## Output
-
-You can see sample reports here: [SAFE — BHIL toolkit](./sample-reports/scan-report-20260322.md) · [CRITICAL — obfuscated backdoor + private key exfiltration](./sample-reports/scan-report-20260330.md). The skill writes a Markdown report to `./code-scanner-reports/scan-report-YYYYMMDD-HHMMSS.md`:
-
-```markdown
-# Code Scan Report
-
-**Target:** https://github.com/...
-**Risk Level:** CRITICAL
-
-## Summary
-...
-
-## Findings
-
-### [CRITICAL] JavaScript dropper with embedded PE32 payload
-**File:** GoldenEye/GoldenEye.js
-**Evidence:** ...
-**Explanation:** ...
-
-## Recommendation
-DO NOT INSTALL — ...
-```
-
-## Headless CLI (gate mode)
-
-Alongside the conversational skill there is a deterministic, non-interactive
-**`code-scanner` CLI** for CI / verification-gate use — it emits a process **exit
-code** and machine-readable **SARIF** instead of a Markdown report, so a build gate
-or another program can branch on it. The skill surface is unchanged; this is an
-additional entrypoint.
+**Claude Code** (Mac/Linux):
 
 ```bash
-code-scanner [TARGET]            # default: current directory
-code-scanner . --sarif out.sarif --severity-threshold HIGH
-# exit 0 = clean · 1 = gating findings · 2 = tool/setup failure · 64 = usage
-```
-
-The gating exit code derives from the **deterministic tier only** (OSV-Scanner /
-Semgrep / dep-scan); heuristic pattern findings are advisory. It runs the tools as
-native binaries on `PATH` with **no Docker/Podman socket** (so it mounts into a
-rootless gate-tools dir). See **[cli/README.md](./cli/README.md)** for the full
-contract, runtime deps, and the containerized integration runner, and
-[ADR-001](./docs/architecture/decisions/001-adopt-sarif-findings-format.md) /
-[ADR-002](./docs/architecture/decisions/002-sandbox-in-gate-execution-model.md)
-for the design decisions.
-
-## Installation
-
-> **Prerequisite:** Docker must be installed and running. See the requirement note at the top of this page.
-
-### Your preferred Tool
-
-Try asking the tool itself, Claude for example, to install the skill and give it the link to this repo.
-
-### Claude Code
-**Mac OS / Linux:**
-```bash
-# Clone and copy the skill into your Claude skills directory
 git clone https://github.com/tkdtaylor/code-scanner /tmp/code-scanner
 cp -r /tmp/code-scanner/code-scanner ~/.claude/skills/
 ```
 
-The dep-scan image builds itself on your first scan. To pre-build it now (optional, saves ~30s on first run):
+The dep-scan Docker image builds itself on first scan (cached thereafter). To pre-build it: `docker build -t dep-scan:latest -f /tmp/code-scanner/code-scanner/docker/Dockerfile.dep-scan /tmp/code-scanner`
+
+**GitHub Copilot, Cursor, Windsurf, Kiro, Antigravity:** Copy `code-scanner/SKILL.md` and `code-scanner/references/` to your agent's `.github/skills/`, `.cursorrules`, `.windsurfrules`, `.kiro/steering/`, or equivalent skill directory. See `code-scanner/` folder structure for layout.
+
+**Trigger phrases:** "Scan this repo for malware", "Is this npm package safe to install", "Check this GitHub URL before I run it", "Review this skill for injection attacks", or any phrasing that suggests evaluating code safety.
+
+Add `--security-review` to force a supplementary Claude Code review even when no HIGH/CRITICAL findings are detected.
+
+## Use as a CLI (gates)
 
 ```bash
-docker build -t dep-scan:latest -f /tmp/code-scanner/code-scanner/docker/Dockerfile.dep-scan /tmp/code-scanner
+code-scanner [TARGET] [--sarif PATH] [--severity-threshold LEVEL]
 ```
 
-**Windows (PowerShell):**
-```powershell
-git clone https://github.com/tkdtaylor/code-scanner
-Copy-Item -Recurse code-scanner\code-scanner "$env:USERPROFILE\.claude\skills\"
-```
+**Exit codes:**
 
-The dep-scan image builds itself on your first scan. To pre-build it now (optional, saves ~30s on first run):
+| Code | Meaning |
+|------|---------|
+| `0` | Clean — no gating findings at or above threshold |
+| `1` | Gating findings present (deterministic tools: OSV-Scanner, Semgrep, dep-scan) |
+| `2` | Tool error or no deterministic tool available |
+| `64` | Usage error |
 
-```powershell
-docker build -t dep-scan:latest -f code-scanner\code-scanner\docker\Dockerfile.dep-scan code-scanner
-```
+**Reliability tiers:**
 
-### Google Antigravity
-Antigravity has native Agent Skills support. Check [https://antigravity.google/docs/skills](https://antigravity.google/docs/skills) for the exact install path — the skill format is compatible. Docker commands run automatically via the integrated terminal.
+- **Deterministic** (OSV-Scanner, Semgrep, dep-scan) — gates the build
+- **Heuristic** (pattern library) — advisory only, never gates
 
-1. Create a new folder in your workspace at <workspace-root>/.agents/skills/code-scanner/ (or if you prefer global, ~/.gemini/antigravity/skills/code-scanner/)
-2. Copy `code-scanner/SKILL.md` to `./skills/code-scanner/SKILL.md`
-3. Copy all files in `code-scanner/references/` to `./skills/code-scanner/references/`
-4. Create a new folder `examples` at `./skills/code-scanner/` (./skills/code-scanner/examples/)
-5. Copy the file in `code-scanner/sample-reports/` to `./skills/code-scanner/examples/`
-6. Switch agent to **Planning Mode** and trigger with a phrase from the [Trigger phrases](#trigger-phrases) section
+The CLI runs against a **bundled, offline Semgrep ruleset** (no registry fetch, reproducible across runs). Requires Python 3 and the native tools on PATH: `osv-scanner`, `semgrep`, `dep-scan`. Missing a tool reduces coverage but does not fail unless all deterministic tools are absent (fail-closed).
 
-### GitHub Copilot (Agent Mode)
-GitHub Copilot has native Agent Skills support (shipped December 2025). The SKILL.md format is compatible — install it at `.github/skills/` and Copilot will load it automatically when the task matches, without polluting every other chat request.
+For Docker-based execution in rootless environments, see [cli/README.md](./cli/README.md).
 
-```bash
-mkdir -p .github/skills/code-scanner
-cp code-scanner/SKILL.md .github/skills/code-scanner/
-cp -r code-scanner/references .github/skills/code-scanner/
-```
+## Tech stack
 
-Use **Agent Mode** in VS Code and trigger with a phrase from the [Trigger phrases](#trigger-phrases) section. Copilot will ask for confirmation before running each Docker command — click **Continue** or enable **Bypass Approvals** in the Copilot settings to allow all commands automatically.
+**Skill:** Claude Skill format (.md + references), Docker for remote-target sandboxing.
 
-> **Troubleshooting:** If Docker commands appear to hang indefinitely, this is a known VS Code shell integration issue with ZSH themes (especially Powerlevel10k). Copilot uses shell prompt markers to detect when a command has finished — custom themes overwrite these markers. Switch the integrated terminal to Bash, or disable `RPS1` in your ZSH theme config.
+**CLI:** Python 3 (stdlib only, no dependencies), with native tool integration (OSV-Scanner, Semgrep, dep-scan).
 
-### Cursor
-Cursor Agent can execute terminal commands, so the full Docker-based scan runs automatically.
-
-1. Open Cursor Settings → **Rules for AI**
-2. Paste the full contents of `code-scanner/SKILL.md` into the rules field
-3. Copy `code-scanner/references/` into your project and update the relative paths in the rules to match, or add the reference file contents directly below the skill instructions
-4. Use Agent mode and trigger with a phrase from the [Trigger phrases](#trigger-phrases) section
-
-Alternatively, add a `.cursorrules` file to your project root with the same content for a project-scoped install.
-
-### Windsurf
-Windsurf's Cascade can execute terminal commands, so the full Docker-based scan runs automatically.
-
-1. Add a `.windsurfrules` file to your project root
-2. Paste the full contents of `code-scanner/SKILL.md` into it
-3. Copy `code-scanner/references/` into your project and update the relative paths to match
-4. Use Cascade in **Write** mode and trigger with a phrase from the [Trigger phrases](#trigger-phrases) section
-
-### Kiro (AWS)
-Kiro uses steering files which follow the same markdown format as SKILL.md — this is the most direct install of any non-Claude platform.
-
-```bash
-mkdir -p .kiro/steering
-cp code-scanner/SKILL.md .kiro/steering/code-scanner.md
-cp -r code-scanner/references .kiro/steering/
-```
-
-Kiro's agent can execute terminal commands, so the full Docker-based scan runs automatically.
-
-
-## Skill structure
-
-```
-code-scanner/           ← skill folder (upload this)
-├── SKILL.md            ← main skill file (required)
-├── docker/
-│   └── Dockerfile.dep-scan ← builds the dep-scan supply chain scanner image
-└── references/
-    ├── patterns.md        ← malicious pattern reference library
-    ├── scan-commands.md   ← Docker run commands for each scan step
-    └── report-template.md ← output format template
-
-cli/                    ← headless CLI gate mode (exit code + SARIF)
-├── code-scanner        ← the executable on PATH (stdlib-only Python shim)
-├── semgrep-rules/      ← bundled, pinned, offline Semgrep ruleset
-└── README.md           ← CLI contract, exit codes, runtime deps
-
-docs/architecture/decisions/  ← ADRs (001 SARIF format, 002 gate execution model)
-tests/                  ← L5 fixtures + hermetic and real-tools test suites
-```
-
-## How the Docker sandbox works
-
-### Isolation backend detection
-
-At the start of every scan, the skill probes for an isolation backend in this order:
-
-1. **`sbx`** — Docker Sandbox (currently macOS and Windows only). Scanning containers run inside the microVM.
-2. **`docker`** — standard Docker Engine or Docker Desktop on the host. This is the path Linux users hit, and the macOS/Windows path when `sbx` isn't installed.
-3. **`none`** — no container runtime found. Only **local path** targets can be scanned, and OSV Scanner / dep-scan are skipped automatically. Remote targets (GitHub URLs, archives, PyPI/npm) will refuse to run because there's nowhere safe to download them.
-
-The first match wins — there's no manual switch. If you have both `sbx` and `docker`, `sbx` is preferred.
-
-### Docker Sandbox (`sbx`) environments
-
-When running Claude Code inside a Docker Sandbox (`sbx`), all scanning containers work normally — `sbx` provides Docker access within the microVM. The scanner auto-detects `sbx` and proceeds with the standard Docker workflow.
-
-The only consideration is network policies. Scans need network access for:
-- **Image pulls**: `registry-1.docker.io`, `production.cloudflare.docker.com`, `ghcr.io` (OSV Scanner)
-- **API queries**: `api.osv.dev` (OSV), `api.github.com`, `pypi.org`, `registry.npmjs.org`, `crates.io`, `proxy.golang.org`, `sum.golang.org` (dep-scan)
-
-The "Balanced" sbx network policy allows all of these by default. If you use a restrictive policy, add these domains to your allow list.
-
-The dep-scan image auto-rebuilds when its Dockerfile changes — a SHA256 hash is stored as a Docker label and checked before each scan. No manual rebuild needed after skill updates.
-
-### Remote targets (sandbox mode)
-
-```
-Host machine
-├── ./code-scanner-reports/        ← report .md files written here (host)
-│   └── scan-report-*.md
-│
-├── /tmp/code-scanner-review-*/    ← temp dir for Claude Code review (if run)
-│   └── ...                    ← non-executable copy, deleted after review
-│
-└── Docker volume: code-scanner-TIMESTAMP  ← all repo content stays here
-    └── /scan/repo/            ← cloned repository (non-executable)
-        └── ...                ← never touches the host filesystem
-
-After scan: docker volume rm code-scanner-TIMESTAMP
-            rm -rf /tmp/code-scanner-review-*
-            → all content permanently deleted
-```
-
-The temp directory is only created when the Claude Code security review runs (no HIGH/CRITICAL findings, or `--security-review` flag). Files are copied with execute permissions stripped and deleted immediately after the review.
-
-Each analysis step runs in a container with:
-- `--network none` — no outbound connections during analysis
-- `--security-opt no-new-privileges` — no privilege escalation
-
-### Local paths (no sandbox)
-
-```
-Host machine
-├── ./code-scanner-reports/        ← report .md files written here
-│   └── scan-report-*.md
-│
-└── <your local path>          ← SCAN_ROOT — scanned in place, read-only
-    └── ...                    ← files left untouched, no copies made
-```
-
-No Docker volume, no download, no temp directory, no export, no cleanup. Only `grep`/`find` read the files. OSV Scanner and dep-scan (if run) still use Docker as a tool runner, but bind-mount `SCAN_ROOT` read-only — they never write to it.
-
-**Why is this safe?** The sandbox exists to prevent *execution* of code fetched from an untrusted source (install hooks, setup scripts, postinstall triggers). Read-only text analysis tools never execute the code they read. If the code is already on your disk, any risk from its presence has already materialised; scanning it with `grep` adds none.
-
-## Contributing
-
-Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Contributions are accepted under Apache-2.0 via the Developer Certificate of Origin (DCO): sign off your commits with `git commit -s`. No CLA required.
-
-## License
-
-code-scanner is licensed under the **Apache License 2.0** — free to use, modify, and distribute, including in commercial and proprietary products. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
-
-> **Security notice:** code-scanner is a security tool provided **as-is, without warranty**. It does not guarantee the security of any system. See the disclaimer in [NOTICE](NOTICE).
-
-Third-party ideas and threat indicators incorporated into the pattern library are credited in [ATTRIBUTIONS.md](ATTRIBUTIONS.md).
-
-## Enterprise Support
-
-Need hardened deployments, integration help, custom detection patterns, or a support SLA? **Commercial support and consulting are available.**
-
-📧 Contact **[tools@taylorguard.me](mailto:tools@taylorguard.me)**
-
-Apache-2.0 means you can build on code-scanner freely — paid support is there if you want a partner, never a requirement to use it.
+See [docs/architecture/decisions/](./docs/architecture/decisions/) for design rationale (ADR-001: SARIF format, ADR-002: sandbox execution model).
 
 ## Sponsorship
 
-code-scanner is independent, open-source security tooling. If it saves you time or risk, consider sponsoring continued development:
+code-scanner is independent, open-source security tooling. If it saves you time or risk, [sponsoring its development](https://github.com/sponsors/tkdtaylor) is the most direct way to keep it maintained.
 
-- 💜 [GitHub Sponsors](https://github.com/sponsors/tkdtaylor)
+## Enterprise support
+
+Commercial support, integration help, and SLAs are available. Apache-2.0 means you can build on code-scanner freely; paid support is a partner if you want one, never a requirement. Contact [tools@taylorguard.me](mailto:tools@taylorguard.me).
+
+## License
+
+[Apache License 2.0](LICENSE) — free to use, modify, and distribute. See [NOTICE](NOTICE) for attribution and [CONTRIBUTING.md](CONTRIBUTING.md) for DCO contribution terms (inbound=outbound, no CLA). code-scanner is a block in the [Secure Agent Ecosystem](https://github.com/tkdtaylor/agent-builder#the-building-blocks); for runtime sandboxing see [exec-sandbox](https://github.com/tkdtaylor/exec-sandbox), for runtime defenses see [armor](https://github.com/tkdtaylor/armor), and for dependency scanning see [dep-scan](https://github.com/tkdtaylor/dep-scan).
+
+---
+
+For detailed setup, testing, and development, see [code-scanner/](./code-scanner/) (skill structure), [cli/](./cli/) (headless CLI contract), and [tests/](./tests/).
