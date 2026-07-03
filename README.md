@@ -7,7 +7,7 @@
 
 Works as a Claude Skill (or compatible agent skill in GitHub Copilot, Cursor, Windsurf, Kiro, Antigravity) and as a headless CLI for verification gates. Part of the [Secure Agent Ecosystem](#the-building-blocks), Apache-2.0 licensed.
 
-> **Status.** Code-scanner scans repositories, packages (PyPI / npm), archives, and skill files for malware patterns and supply-chain indicators. The conversational skill path and headless CLI (SARIF + exit codes for gating) are both production. Windows/macOS Docker Sandbox (`sbx`) support is present; integration with agent-builder's gate is live. The Telegram operator channel is planned but not yet wired.
+> **Status.** Code-scanner scans repositories, packages (PyPI / npm), archives, and skill files for malware patterns and supply-chain indicators. The conversational skill path and headless CLI (SARIF + exit codes for gating) are both production. Windows/macOS Docker Sandbox (`sbx`) support is present; integration with agent-builder's gate is live.
 
 ## Contents
 
