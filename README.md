@@ -88,7 +88,7 @@ Add `--security-review` to any phrase to force the Claude Code security review s
 
 **What it does *not* do (and which sibling owns it instead):**
 - Maintain a CVE / dependency-vulnerability database — it orchestrates **dep-scan** / OSV-Scanner for that
-- Provide runtime execution isolation for the code it scans → **exec-sandbox** (Coming soon)
+- Provide runtime execution isolation for the code it scans → **[exec-sandbox](https://github.com/tkdtaylor/exec-sandbox)**
 - Defend the runtime prompt / output / tool-call path → **[armor](https://github.com/tkdtaylor/armor)**
 
 `code-scanner` is one block in a composable secure-agent ecosystem — each block is standalone and independently usable, and composes with its siblings over published contracts rather than absorbing their responsibilities (no central "god object").
