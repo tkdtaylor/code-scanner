@@ -21,10 +21,10 @@ Concretely, today dep-scan reconstructs a warm-cache verdict as `{"package": <na
 
 **dep-scan task 113** (planned, sibling repo) adds a machine-readable `PINNED_VERSION` file at the dep-scan repo root defining the single ecosystem version pin. Today `code-scanner/docker/Dockerfile.dep-scan` hardcodes its own pin (`VERSION="v1.3.1"` inside the download `RUN`), independent of the pin in sibling repos (reverse-engineer currently pins v1.2.1: drift in the wild). This Dockerfile is the image the conversational skill auto-builds ("built automatically on first scan and after Dockerfile changes", `code-scanner/SKILL.md`; pre-build command documented in `README.md`). It downloads over TLS from GitHub releases without SHA pinning, so fetching the pin at build time is consistent with its existing trust model.
 
-**To confirm when the dependencies land** (do not guess; read dep-scan's updated `docs/spec/interfaces.md`):
+**Confirmed against dep-scan's shipped `docs/spec/interfaces.md` (tasks 112/113 merged, dep-scan commit `40f3007`/`a53752e`):**
 
-- the exact key name of the additive cache-provenance field (expected shape: something like `"provenance": "cache"` on the entry). The gating logic must not depend on it either way (REQ-002-04).
-- the exact `PINNED_VERSION` filename, location, and format (assumed below: repo root, single line `v<semver>` such as `v1.4.0`, trailing newline allowed).
+- The additive cache-provenance field is **not** a flat `"provenance": "cache"` string as assumed above. It is a nested `cache` object, present only on an attributed cache hit: `"cache": {"hit": true, "scanned_at": "<RFC3339>", "dep_scan_version": "<semver>"}`, omitted entirely on a fresh scan (`serde(skip_serializing_if = "Option::is_none")`). `cache.hit` is always `true` when the key is present; its presence alone signals a hit. The gating logic in `run_dep_scan` does not read this field at all (REQ-002-04): it keys only on `policies`, so it is agnostic to the field's shape by construction.
+- `PINNED_VERSION`: repo root, raw URL `https://raw.githubusercontent.com/tkdtaylor/dep-scan/main/PINNED_VERSION`, format confirmed exactly as assumed: single line `"v" + semver + "\n"` (e.g. `v1.3.1\n`), LF only. dep-scan's own README documents the Docker consumer pattern as `install.sh --version=<pin>` (sha256sum-verified against published checksums), which this task's Dockerfile now uses instead of an independent tarball fetch.
 
 ## Files and functions (exact)
 

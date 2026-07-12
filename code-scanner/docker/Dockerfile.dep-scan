@@ -14,15 +14,18 @@ LABEL dev.code-scanner.description="Supply chain dependency scanner for Code Sca
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl jq && \
     rm -rf /var/lib/apt/lists/*
-RUN ARCH=$(uname -m) && \
-    case "$ARCH" in \
-      x86_64|amd64)  TARGET="x86_64-unknown-linux-gnu" ;; \
-      aarch64|arm64)  TARGET="aarch64-unknown-linux-gnu" ;; \
-      *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
-    esac && \
-    VERSION="v1.3.1" && \
-    curl -fsSL "https://github.com/tkdtaylor/dep-scan/releases/download/${VERSION}/dep-scan-${VERSION}-${TARGET}.tar.gz" \
-      -o /tmp/dep-scan.tar.gz && \
-    tar xzf /tmp/dep-scan.tar.gz -C /usr/local/bin && \
-    chmod +x /usr/local/bin/dep-scan && \
-    rm /tmp/dep-scan.tar.gz
+
+# Single ecosystem pin: dep-scan's PINNED_VERSION channel (dep-scan task 113),
+# consumed via dep-scan's own documented pattern (README "Version pinning for
+# consumers"). Installed through dep-scan's install.sh, which does its own
+# arch/OS detection and sha256sum-verifies the download against dep-scan's
+# published checksums, rather than an independent tarball fetch in this file.
+#
+# Override for hermetic tests, deterministic CI builds, or emergency rollback:
+#   docker build --build-arg DEP_SCAN_VERSION=v1.3.1 ...
+ARG DEP_SCAN_VERSION=""
+RUN VERSION="${DEP_SCAN_VERSION:-$(curl -fsSL https://raw.githubusercontent.com/tkdtaylor/dep-scan/main/PINNED_VERSION | tr -d '[:space:]')}" && \
+    test -n "$VERSION" && \
+    curl -fsSL https://raw.githubusercontent.com/tkdtaylor/dep-scan/main/install.sh \
+      | INSTALL_DIR=/usr/local/bin bash -s -- --version="${VERSION}" && \
+    dep-scan --version | grep -F -- "${VERSION#v}"
