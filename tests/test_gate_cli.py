@@ -84,6 +84,30 @@ def fake_path():
     return os.pathsep.join([FAKE_TOOLS, interp, "/usr/bin", "/bin"])
 
 
+_DEP_SCAN_ONLY_DIR = None
+
+
+def dep_scan_only_path():
+    """A PATH with the fake dep-scan tool but NOT osv-scanner/semgrep.
+
+    Isolates dep-scan's own gating behavior: `fake_path()`'s osv-scanner fake
+    independently reports a CRITICAL CVE-2020-14343 on any target whose context
+    string contains "vulnerable" (see tests/fake-tools/osv-scanner), so a run
+    against VULN under the full `fake_path()` always gates regardless of what
+    dep-scan reports. Task 002's cached-legacy e2e assertion needs a PATH where
+    dep-scan is the only deterministic tool, so its own refusal to gate on an
+    unattributed cache sentinel is what determines the exit code.
+    """
+    global _DEP_SCAN_ONLY_DIR
+    if _DEP_SCAN_ONLY_DIR is None:
+        import tempfile
+        d = tempfile.mkdtemp(prefix="cs-depscan-only-")
+        os.symlink(os.path.join(FAKE_TOOLS, "dep-scan"), os.path.join(d, "dep-scan"))
+        _DEP_SCAN_ONLY_DIR = d
+    interp = os.path.dirname(sys.executable)
+    return os.pathsep.join([_DEP_SCAN_ONLY_DIR, interp, "/usr/bin", "/bin"])
+
+
 _MINIMAL_DIR = None
 
 
@@ -326,6 +350,32 @@ SCAN_COMMANDS_MD = os.path.join(REPO, "code-scanner", "references",
 FAKE_DEP_SCAN = os.path.join(FAKE_TOOLS, "dep-scan")
 _JSON_FLAG = re.compile(r"--json\b")
 
+# --- dep-scan cached-verdict attribution + shared version pin (task 002) -------
+# dep-scan task 112 shape: real version, full policies, additive `cache` object.
+# Provenance key confirmed against dep-scan's docs/spec/interfaces.md (task 112,
+# merged): a nested `cache` object (`cache.hit` / `cache.scanned_at` /
+# `cache.dep_scan_version`), not a flat string field. Gating must not read it.
+
+def _attributed_cached_entry():
+    return {
+        "package": "PyYAML", "version": "5.3.1", "registry": "pypi",
+        "age_hours": None, "result": "block",
+        "reason": "Found known vulnerability(ies): GHSA-8q59-q68h-6hv4",
+        "cache": {"hit": True, "scanned_at": "2026-07-10T08:15:00Z",
+                  "dep_scan_version": "1.3.1"},
+        "policies": [
+            {"policy_name": "age", "result": "pass", "reason": None},
+            {"policy_name": "vulnerability", "result": "block",
+             "reason": "Found known vulnerability(ies): GHSA-8q59-q68h-6hv4"},
+        ],
+    }
+
+
+def _legacy_sentinel_entry():
+    return {"package": "PyYAML", "version": "cached", "registry": "pypi",
+            "age_hours": None, "result": "block", "reason": "cached result",
+            "policies": []}
+
 
 def _write_pyyaml_manifest(tmp_path):
     """A single-package pypi lockfile-mode manifest (the spec's shared fixture)."""
@@ -478,7 +528,8 @@ def test_run_dep_scan_per_policy_mapping_mixed(tmp_path, monkeypatch):
 
 
 def test_run_dep_scan_warm_cache_sentinel_does_not_gate(tmp_path, monkeypatch, capsys):
-    """T-001-09."""
+    """T-001-09 (superseded by task 002: legacy-note wording, same zero-findings
+    expectation; see T-002-03 for the dedicated task 002 assertion)."""
     _write_pyyaml_manifest(tmp_path)
     _patch_dep_scan_only(monkeypatch)
     entry = {
@@ -494,6 +545,7 @@ def test_run_dep_scan_warm_cache_sentinel_does_not_gate(tmp_path, monkeypatch, c
     assert findings == []
     err = capsys.readouterr().err
     assert "unattributable" in err
+    assert "legacy" in err
     assert "not gating" in err
 
 
@@ -529,6 +581,107 @@ def test_run_dep_scan_rc1_with_parseable_output_is_not_a_failure(tmp_path, monke
     assert cs.run_dep_scan(str(tmp_path)) == []
 
 
+def test_attributed_cached_block_gates_high(tmp_path, monkeypatch, capsys):
+    """T-002-01: attributed cached block gates as HIGH."""
+    _write_pyyaml_manifest(tmp_path)
+    _patch_dep_scan_only(monkeypatch)
+    stub = _RecordingRun(1, json.dumps([_attributed_cached_entry()]), "")
+    monkeypatch.setattr(cs, "_run", stub)
+
+    findings = cs.run_dep_scan(str(tmp_path))
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.rule_id == "dep-scan/vulnerability"
+    assert f.severity == "HIGH"
+    assert f.message == ("PyYAML@5.3.1: Found known vulnerability(ies): "
+                          "GHSA-8q59-q68h-6hv4")
+    assert f.tier == cs.TIER_DETERMINISTIC
+    err = capsys.readouterr().err
+    assert "not gating" not in err
+
+
+def test_gating_is_provenance_field_agnostic(tmp_path, monkeypatch, capsys):
+    """T-002-02: same entry minus the `cache` key yields identical findings."""
+    _write_pyyaml_manifest(tmp_path)
+    _patch_dep_scan_only(monkeypatch)
+    entry = _attributed_cached_entry()
+    del entry["cache"]
+    stub = _RecordingRun(1, json.dumps([entry]), "")
+    monkeypatch.setattr(cs, "_run", stub)
+
+    findings = cs.run_dep_scan(str(tmp_path))
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.rule_id == "dep-scan/vulnerability"
+    assert f.severity == "HIGH"
+    assert f.message == ("PyYAML@5.3.1: Found known vulnerability(ies): "
+                          "GHSA-8q59-q68h-6hv4")
+    assert f.tier == cs.TIER_DETERMINISTIC
+    err = capsys.readouterr().err
+    assert "not gating" not in err
+
+
+def test_legacy_sentinel_still_refuses_to_gate(tmp_path, monkeypatch, capsys):
+    """T-002-03."""
+    _write_pyyaml_manifest(tmp_path)
+    _patch_dep_scan_only(monkeypatch)
+    stub = _RecordingRun(1, json.dumps([_legacy_sentinel_entry()]), "")
+    monkeypatch.setattr(cs, "_run", stub)
+
+    findings = cs.run_dep_scan(str(tmp_path))
+
+    assert findings == []
+    err = capsys.readouterr().err
+    assert "legacy" in err
+    assert "PyYAML" in err
+    assert "not gating" in err
+
+
+def test_attributed_cached_warn_maps_to_medium(tmp_path, monkeypatch):
+    """T-002-04."""
+    _write_pyyaml_manifest(tmp_path)
+    _patch_dep_scan_only(monkeypatch)
+    entry = _attributed_cached_entry()
+    entry["result"] = "warn"
+    entry["policies"] = [
+        {"policy_name": "age", "result": "pass", "reason": None},
+        {"policy_name": "typosquatting", "result": "warn",
+         "reason": "similar to 'pyaml'"},
+    ]
+    stub = _RecordingRun(1, json.dumps([entry]), "")
+    monkeypatch.setattr(cs, "_run", stub)
+
+    findings = cs.run_dep_scan(str(tmp_path))
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.severity == "MEDIUM"
+    assert f.rule_id == "dep-scan/typosquatting"
+    assert f.message == "PyYAML@5.3.1: similar to 'pyaml'"
+
+
+@pytest.mark.parametrize("order", ["attributed-first", "legacy-first"])
+def test_mixed_batch_gates_only_attributed_entry(order, tmp_path, monkeypatch, capsys):
+    """T-002-05."""
+    _write_pyyaml_manifest(tmp_path)
+    _patch_dep_scan_only(monkeypatch)
+    attributed = _attributed_cached_entry()
+    legacy = _legacy_sentinel_entry()
+    batch = [attributed, legacy] if order == "attributed-first" else [legacy, attributed]
+    stub = _RecordingRun(1, json.dumps(batch), "")
+    monkeypatch.setattr(cs, "_run", stub)
+
+    findings = cs.run_dep_scan(str(tmp_path))
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "dep-scan/vulnerability"
+    assert findings[0].severity == "HIGH"
+    err = capsys.readouterr().err
+    assert err.count("legacy") == 1
+
+
 def test_end_to_end_exit_codes_preserved_0_1_2_64():
     """T-001-12: the explicit non-regression gate for the flag switch."""
     rc, _, err = run_cli(CLEAN, path=fake_path())
@@ -547,6 +700,145 @@ def test_end_to_end_exit_codes_preserved_0_1_2_64():
     assert rc == EXIT_USAGE, f"expected 64 (usage), got {rc}\n{err}"
 
 
+def test_e2e_cached_attributed_mode_exits_1():
+    """T-002-06."""
+    rc, sarif, err = run_cli(VULN, path=fake_path(),
+                              env_extra={"FAKE_DEPSCAN_MODE": "cached-attributed"})
+    assert rc == EXIT_FINDINGS, f"expected 1 (attributed cached block gates), got {rc}\n{err}"
+    dep_scan_errs = [
+        r for run in sarif["runs"] if run["tool"]["driver"]["name"] == "dep-scan"
+        for r in run.get("results", [])
+        if r["level"] == "error" and r["ruleId"] == "dep-scan/vulnerability"
+    ]
+    assert dep_scan_errs, f"expected an error-level dep-scan/vulnerability result: {sarif}"
+    dep_scan_runs = [run for run in sarif["runs"]
+                      if run["tool"]["driver"]["name"] == "dep-scan"]
+    assert all(run["properties"]["gating"] is True for run in dep_scan_runs)
+
+
+def test_e2e_cached_legacy_mode_exits_0_and_warns():
+    """T-002-07: the load-bearing fail-closed assertion. A top-level `block`
+    without policy attribution must not flip the exit code. Uses
+    dep_scan_only_path() (not fake_path()) so osv-scanner's independent,
+    mode-agnostic CVE finding on the VULN fixture can't ride along and mask a
+    regression in dep-scan's own refusal-to-gate logic."""
+    rc, sarif, err = run_cli(VULN, path=dep_scan_only_path(),
+                              env_extra={"FAKE_DEPSCAN_MODE": "cached-legacy"})
+    assert rc == EXIT_CLEAN, f"expected 0 (legacy sentinel must not gate), got {rc}\n{err}"
+    assert "legacy" in err
+    dep_scan_errs = [
+        r for run in sarif["runs"] if run["tool"]["driver"]["name"] == "dep-scan"
+        for r in run.get("results", [])
+        if r["level"] == "error"
+    ]
+    assert dep_scan_errs == [], f"expected zero error-level dep-scan results: {dep_scan_errs}"
+
+
+@pytest.mark.parametrize("mode,expected_version,expected_policies_empty", [
+    ("cached-attributed", "5.3.1", False),
+    ("cached-legacy", "cached", True),
+])
+def test_fake_dep_scan_modes_are_pinned(mode, expected_version, expected_policies_empty):
+    """T-002-08."""
+    target_dir = os.path.join(FIXTURES, "vulnerable-repo")
+    env = dict(os.environ)
+    env["FAKE_DEPSCAN_MODE"] = mode
+    proc = subprocess.run(
+        [sys.executable, FAKE_DEP_SCAN, "check", "--lockfile", "requirements.txt",
+         "--lockfile-type", "pypi", "--format", "json"],
+        cwd=target_dir, capture_output=True, text=True, env=env, check=False,
+    )
+    entries = json.loads(proc.stdout)
+    assert len(entries) == 1
+    assert entries[0]["version"] == expected_version
+    assert (entries[0]["policies"] == []) == expected_policies_empty
+
+
+def test_fake_dep_scan_default_mode_shape_unchanged():
+    """T-002-08 (regression counter-case): unset mode keeps the pre-task-002 shape."""
+    target_dir = os.path.join(FIXTURES, "vulnerable-repo")
+    proc = subprocess.run(
+        [sys.executable, FAKE_DEP_SCAN, "check", "--lockfile", "requirements.txt",
+         "--lockfile-type", "pypi", "--format", "json"],
+        cwd=target_dir, capture_output=True, text=True, check=False,
+    )
+    entries = json.loads(proc.stdout)
+    assert len(entries) == 1
+    assert entries[0]["version"] == "5.3.1"
+    assert "cache" not in entries[0]
+    assert entries[0]["policies"]
+
+
+# --- dep-scan Dockerfile: shared PINNED_VERSION pin (task 002 part b) ----------
+
+DEP_SCAN_DOCKERFILE = os.path.join(REPO, "code-scanner", "docker",
+                                    "Dockerfile.dep-scan")
+_INDEPENDENT_PIN = re.compile(r'VERSION="v[0-9]')
+
+
+def test_dockerfile_static_contract():
+    """T-002-09."""
+    text = open(DEP_SCAN_DOCKERFILE, encoding="utf-8").read()
+    assert not _INDEPENDENT_PIN.search(text), \
+        "Dockerfile.dep-scan must not hardcode an independent VERSION literal"
+    assert "PINNED_VERSION" in text
+    assert "ARG DEP_SCAN_VERSION" in text
+    assert 'test -n "$VERSION"' in text
+    assert re.search(r"dep-scan --version\s*\|\s*grep\b", text), \
+        "expected a build-time `dep-scan --version | grep ...` verification step"
+
+
+DOCKER = shutil.which("docker")
+_KNOWN_GOOD_PIN = "v1.3.1"
+
+
+@pytest.mark.skipif(not DOCKER, reason="docker not available")
+def test_docker_build_with_build_arg_pins_version():
+    """T-002-10: deterministic positive build via --build-arg."""
+    tag = "dep-scan:t002-positive"
+    build = subprocess.run(
+        [DOCKER, "build", "-f", DEP_SCAN_DOCKERFILE,
+         "--build-arg", f"DEP_SCAN_VERSION={_KNOWN_GOOD_PIN}", "-t", tag, REPO],
+        capture_output=True, text=True, check=False,
+    )
+    assert build.returncode == 0, f"build failed:\n{build.stdout}\n{build.stderr}"
+    try:
+        run = subprocess.run(
+            [DOCKER, "run", "--rm", "--entrypoint", "dep-scan", tag, "--version"],
+            capture_output=True, text=True, check=False,
+        )
+        assert run.returncode == 0, run.stderr
+        assert _KNOWN_GOOD_PIN[1:] in run.stdout, run.stdout
+    finally:
+        subprocess.run([DOCKER, "rmi", "-f", tag], capture_output=True, check=False)
+
+
+@pytest.mark.skipif(not DOCKER, reason="docker not available")
+def test_docker_build_bogus_version_fails_closed():
+    """T-002-11: a bogus version must fail the build, not fall through unpinned."""
+    tag = "dep-scan:t002-bogus"
+    build = subprocess.run(
+        [DOCKER, "build", "-f", DEP_SCAN_DOCKERFILE,
+         "--build-arg", "DEP_SCAN_VERSION=v0.0.0", "-t", tag, REPO],
+        capture_output=True, text=True, check=False,
+    )
+    assert build.returncode != 0, "build must fail closed on a nonexistent release"
+    subprocess.run([DOCKER, "rmi", "-f", tag], capture_output=True, check=False)
+
+
+# --- comment/caveat hygiene (task 002) ------------------------------------------
+
+def test_stale_cache_caveat_text_updated():
+    """T-002-13. The stale phrase is built via concatenation so this assertion's
+    own source line is not itself a false-positive match."""
+    cli_text = open(CLI, encoding="utf-8").read()
+    test_text = open(os.path.abspath(__file__), encoding="utf-8").read()
+    stale_phrase = "unattributable " + "cached result" + " sentinel"
+    assert "likely a cache hit" not in cli_text
+    assert "legacy" in cli_text
+    assert stale_phrase not in test_text
+
+
 # --- opt-in real-tools integration ---------------------------------------------
 
 REAL = os.environ.get("CODE_SCANNER_REAL_TOOLS") == "1"
@@ -562,14 +854,18 @@ def test_real_tools_clean_repo():
 
 @pytest.mark.skipif(not REAL, reason="set CODE_SCANNER_REAL_TOOLS=1 to run")
 def test_real_tools_vulnerable_repo():
-    # The gating assertion is a version-specific CVE. OSV-Scanner reads pinned
-    # versions directly and is cache-stable; dep-scan's on-disk cache can collapse
-    # a real verdict into an unattributable "cached result" sentinel (which we
-    # deliberately do NOT gate on), so dep-scan alone can't make this assertion
-    # reproducible. Require osv-scanner for the strict check.
+    # The gating assertion is a version-specific CVE. dep-scan's cache is now
+    # attributed on a hit (task 112: real version, full policies), so a warm
+    # cache no longer drops the finding out of gating. A *cold* run still
+    # depends on live registry/OSV lookups, though, which are not reproducible
+    # across arbitrary CI environments. OSV-Scanner reads pinned versions
+    # directly from the lockfile and is cache-stable regardless of network
+    # state, so it stays the required tool for this strict, deterministic
+    # assertion.
     if not shutil.which("osv-scanner"):
         pytest.skip("strict vuln-dep gating needs osv-scanner (cache-stable, "
-                    "version-aware); dep-scan's cache is non-deterministic here")
+                    "version-aware, and reproducible without a live registry "
+                    "round-trip)")
     rc, sarif, err = run_cli(VULN)
     assert rc == EXIT_FINDINGS, f"real-tools vuln repo expected 1, got {rc}\n{err}"
     assert error_results_from_deterministic(sarif), \

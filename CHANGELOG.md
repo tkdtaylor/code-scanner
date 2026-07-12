@@ -15,8 +15,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 - Agentic **skill + MCP-server threat coverage** (prompt injection, embedded
   commands, exfiltration, excessive agency, memory poisoning, trigger abuse).
 - Rust (`Cargo.lock`) and Go (`go.sum`) transitive dependency scanning via
-  dep-scan (now pinned at v1.3.1), with crates.io + Go proxy/sumdb on the
-  network allow-lists.
+  dep-scan, with crates.io + Go proxy/sumdb on the network allow-lists.
 - SARIF findings format adopted as the report interchange format (ADR-001).
 - Semgrep pinned to a bundled offline ruleset (no `--config auto` network
   dependency at scan time).
@@ -27,6 +26,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 - **Relicensed to Apache-2.0** (from PolyForm Noncommercial 1.0.0), with SPDX
   headers, NOTICE, DCO sign-off, and contribution guide.
 - Rebranded from CodeScan to Code Scanner.
+- The gate CLI now gates on an attributed dep-scan cache hit (dep-scan task
+  112: real version, full `policies` array, additive `cache` object) exactly
+  like a fresh scan. Only a legacy pre-112 cache sentinel (`version: "cached"`,
+  empty `policies`) is still refused, fail closed.
+- `Dockerfile.dep-scan` installs dep-scan via dep-scan's own `install.sh`
+  (checksum-verified) at the version named in dep-scan's published
+  `PINNED_VERSION` file, instead of an independent hardcoded tag. Override
+  with `--build-arg DEP_SCAN_VERSION=vX.Y.Z` for deterministic builds or
+  rollback.
 
 ### Fixed
 

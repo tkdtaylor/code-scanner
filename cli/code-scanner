@@ -273,6 +273,15 @@ def run_dep_scan(target):
     checks. Returns list[Finding]. Verdicts: block → HIGH, warn → MEDIUM
     (scan-commands.md). Note: `gods` is dep-scan's `go`-command wrapper, not a
     general check invoker — we call `dep-scan` directly.
+
+    Gating keys on the per-entry `policies` array only, never on the top-level
+    `result` alone and never on the additive `cache` object (dep-scan task 112):
+    an attributed cache-hit entry carries the real resolved version and its full
+    `policies` array, so it gates exactly like a fresh scan, with or without the
+    `cache` key present. Only a pre-112 dep-scan binary's legacy sentinel
+    (`version: "cached"`, empty `policies`, a bare top-level block/warn) is
+    refused: that shape carries no attributable policy detail, so gating on it
+    would be unreproducible. The fail-closed refusal note names it as legacy.
     """
     if not _have("dep-scan"):
         return None
@@ -302,16 +311,20 @@ def run_dep_scan(target):
         for entry in _dep_scan_entries(data):
             name = entry.get("package") or entry.get("name", "?")
             ver = entry.get("version", "")
-            # Gate ONLY on attributable policy violations. A bare block/warn with
-            # no policy detail is a dep-scan cache sentinel (version "cached",
-            # empty policies) — not reproducible, so it must not gate.
+            # Gate ONLY on attributable policy violations. An attributed cache
+            # hit (dep-scan task 112) carries the real version and its full
+            # `policies` array, so it gates here like any fresh entry. A bare
+            # block/warn with no policy detail can only come from a legacy
+            # pre-112 dep-scan binary's cache sentinel (version "cached",
+            # empty policies): not reproducible, so it must not gate.
             violating = [p for p in (entry.get("policies") or [])
                          if (p.get("result") or "").lower() in ("block", "warn")]
             if not violating:
                 top = (entry.get("result") or "").lower()
                 if top in ("block", "warn"):
                     print(f"{TOOL_NAME}: dep-scan gave an unattributable '{top}' "
-                          f"for {name} (no policy detail — likely a cache hit); "
+                          f"for {name} (legacy pre-112 cache sentinel, no policy "
+                          f"detail; upgrade dep-scan to the pinned version); "
                           f"not gating", file=sys.stderr)
                 continue
             depth = entry.get("depth")
