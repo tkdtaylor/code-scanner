@@ -281,13 +281,13 @@ def run_dep_scan(target):
     for kind, path, is_lockfile in _find_dep_manifests(target):
         if is_lockfile:
             cmd = ["dep-scan", "check", "--lockfile", path,
-                   "--lockfile-type", _LOCKFILE_TYPE[kind], "--json"]
+                   "--lockfile-type", _LOCKFILE_TYPE[kind], "--format", "json"]
         else:
             names = _read_dep_names(kind, path)
             if not names:
                 continue
             cmd = ["dep-scan", "check", *names,
-                   "--registry", _REGISTRY[kind], "--json"]
+                   "--registry", _REGISTRY[kind], "--format", "json"]
         rc, out, err = _run(cmd, cwd=target)
         # dep-scan exits non-zero when a policy is violated; that is a finding,
         # not a tool error. Only treat empty-output non-zero as a real failure.

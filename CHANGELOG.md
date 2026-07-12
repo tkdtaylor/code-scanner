@@ -28,6 +28,14 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   headers, NOTICE, DCO sign-off, and contribution guide.
 - Rebranded from CodeScan to Code Scanner.
 
+### Fixed
+
+- Every `dep-scan check` invocation (headless gate CLI and the
+  `scan-commands.md` skill reference) now uses the documented, stable
+  `--format json` contract instead of the deprecated `--json` alias. No
+  behavior change; guards against the alias disappearing on a future dep-scan
+  major version.
+
 ## [1.1.0] — 2026-03-22
 
 ### Added

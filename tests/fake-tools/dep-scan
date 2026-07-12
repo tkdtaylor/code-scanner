@@ -1,11 +1,29 @@
 #!/usr/bin/env python3
 # Hermetic fake `dep-scan` for the L5 test harness. Emits the name-based array
 # shape. `block` verdict on the vulnerable fixture, empty array when clean.
+#
+# Hardened to require the documented `--format json` contract and reject the
+# deprecated `--json` alias: any regression in the real CLI back to `--json`
+# must fail this hermetic suite loudly (rc 2, empty stdout) rather than pass
+# silently (task 001).
 import json
 import os
 import sys
 
-ctx = " ".join(sys.argv) + " " + os.getcwd()
+argv = sys.argv[1:]
+
+if "--json" in argv:
+    print("fake dep-scan: deprecated flag --json is not supported here; "
+          "use --format json", file=sys.stderr)
+    sys.exit(2)
+
+has_format_json = any(a == "--format" and b == "json"
+                       for a, b in zip(argv, argv[1:]))
+if not has_format_json:
+    print("fake dep-scan: missing required --format json", file=sys.stderr)
+    sys.exit(2)
+
+ctx = " ".join(argv) + " " + os.getcwd()
 is_vuln = "vulnerable" in ctx
 
 if is_vuln:
