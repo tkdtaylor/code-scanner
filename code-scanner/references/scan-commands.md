@@ -240,13 +240,13 @@ docker run --rm \
       if [ -f "$lock" ]; then
         found_any=true
         echo "=== npm deps from ${lock#/scan/repo/} (transitive) ==="
-        dep-scan check --registry npm --lockfile "$lock" --transitive --json 2>&1
+        dep-scan check --registry npm --lockfile "$lock" --transitive --format json 2>&1
       else
         deps=$(jq -r "(.dependencies // {}) + (.devDependencies // {}) | keys[]" "$pj" 2>/dev/null | tr "\n" " ")
         if [ -n "$deps" ]; then
           found_any=true
           echo "=== npm deps from ${pj#/scan/repo/} (direct only — no lockfile) ==="
-          dep-scan check $deps --registry npm --json 2>&1
+          dep-scan check $deps --registry npm --format json 2>&1
         fi
       fi
     done
@@ -257,7 +257,7 @@ docker run --rm \
       if [ -n "$deps" ]; then
         found_any=true
         echo "=== PyPI deps from ${req#/scan/repo/} ==="
-        dep-scan check $deps --registry pypi --json 2>&1
+        dep-scan check $deps --registry pypi --format json 2>&1
       fi
     done
 
@@ -269,7 +269,7 @@ docker run --rm \
         if [ -n "$deps" ]; then
           found_any=true
           echo "=== PyPI deps from ${pp#/scan/repo/} ==="
-          dep-scan check $deps --registry pypi --json 2>&1
+          dep-scan check $deps --registry pypi --format json 2>&1
         fi
       fi
     done
@@ -278,14 +278,14 @@ docker run --rm \
     for cl in $(find /scan/repo -name "Cargo.lock" -not -path "*/.git/*"); do
       found_any=true
       echo "=== crates from ${cl#/scan/repo/} (transitive) ==="
-      dep-scan check --registry crates --lockfile "$cl" --transitive --json 2>&1
+      dep-scan check --registry crates --lockfile "$cl" --transitive --format json 2>&1
     done
 
     # Go modules (from go.sum — already the flattened transitive set)
     for gs in $(find /scan/repo -name "go.sum" -not -path "*/.git/*"); do
       found_any=true
       echo "=== go modules from ${gs#/scan/repo/} (transitive) ==="
-      dep-scan check --registry go --lockfile "$gs" --transitive --json 2>&1
+      dep-scan check --registry go --lockfile "$gs" --transitive --format json 2>&1
     done
 
     if [ "$found_any" = false ]; then
@@ -296,7 +296,7 @@ docker run --rm \
 
 ### Interpreting dep-scan output
 
-dep-scan emits JSON when `--json` is used. There are **two shapes** depending on whether `--transitive` was passed:
+dep-scan emits JSON when `--format json` is used. There are **two shapes** depending on whether `--transitive` was passed:
 
 - **Without `--transitive`** (name-based calls — PyPI manifests): a JSON **array** of package entries.
 - **With `--transitive`** (lockfile-based calls — npm `package-lock.json`, Rust `Cargo.lock`, Go `go.sum`): a JSON **object** `{ "results": [...], "transitive": { "nodes": [...], "worst_verdict": ..., "diagnostics": [...] } }`. `results` is the same per-package array; `transitive.nodes` lists every resolved node with its `depth` (0 = direct dependency, > 0 = transitive) and `verdict`; `worst_verdict` rolls up the whole tree; `diagnostics` records any nodes that could not be resolved/fetched.
@@ -638,13 +638,13 @@ docker run --rm \
       if [ -f "$lock" ]; then
         found_any=true
         echo "=== npm deps from ${lock#/scan/repo/} (transitive) ==="
-        dep-scan check --registry npm --lockfile "$lock" --transitive --json 2>&1
+        dep-scan check --registry npm --lockfile "$lock" --transitive --format json 2>&1
       else
         deps=$(jq -r "(.dependencies // {}) + (.devDependencies // {}) | keys[]" "$pj" 2>/dev/null | tr "\n" " ")
         if [ -n "$deps" ]; then
           found_any=true
           echo "=== npm deps from ${pj#/scan/repo/} (direct only — no lockfile) ==="
-          dep-scan check $deps --registry npm --json 2>&1
+          dep-scan check $deps --registry npm --format json 2>&1
         fi
       fi
     done
@@ -655,7 +655,7 @@ docker run --rm \
       if [ -n "$deps" ]; then
         found_any=true
         echo "=== PyPI deps from ${req#/scan/repo/} ==="
-        dep-scan check $deps --registry pypi --json 2>&1
+        dep-scan check $deps --registry pypi --format json 2>&1
       fi
     done
 
@@ -667,7 +667,7 @@ docker run --rm \
         if [ -n "$deps" ]; then
           found_any=true
           echo "=== PyPI deps from ${pp#/scan/repo/} ==="
-          dep-scan check $deps --registry pypi --json 2>&1
+          dep-scan check $deps --registry pypi --format json 2>&1
         fi
       fi
     done
@@ -676,14 +676,14 @@ docker run --rm \
     for cl in $(find /scan/repo -name "Cargo.lock" -not -path "*/.git/*"); do
       found_any=true
       echo "=== crates from ${cl#/scan/repo/} (transitive) ==="
-      dep-scan check --registry crates --lockfile "$cl" --transitive --json 2>&1
+      dep-scan check --registry crates --lockfile "$cl" --transitive --format json 2>&1
     done
 
     # Go modules (from go.sum — already the flattened transitive set)
     for gs in $(find /scan/repo -name "go.sum" -not -path "*/.git/*"); do
       found_any=true
       echo "=== go modules from ${gs#/scan/repo/} (transitive) ==="
-      dep-scan check --registry go --lockfile "$gs" --transitive --json 2>&1
+      dep-scan check --registry go --lockfile "$gs" --transitive --format json 2>&1
     done
 
     if [ "$found_any" = false ]; then

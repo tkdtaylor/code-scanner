@@ -16,6 +16,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -313,6 +314,237 @@ def test_bundled_semgrep_rules_are_valid_yaml():
         assert isinstance(doc.get("rules"), list) and doc["rules"], fn
         for r in doc["rules"]:
             assert r.get("id") and r.get("languages") and r.get("severity"), fn
+
+
+# --- dep-scan `--format json` contract (task 001) -------------------------------
+# Pins the documented, stable contract (`dep-scan check ... --format json`) that
+# replaced the deprecated `--json` alias. See docs/tasks/backlog/001-*.md and its
+# paired test spec for the full rationale.
+
+SCAN_COMMANDS_MD = os.path.join(REPO, "code-scanner", "references",
+                                 "scan-commands.md")
+FAKE_DEP_SCAN = os.path.join(FAKE_TOOLS, "dep-scan")
+_JSON_FLAG = re.compile(r"--json\b")
+
+
+def _write_pyyaml_manifest(tmp_path):
+    """A single-package pypi lockfile-mode manifest (the spec's shared fixture)."""
+    manifest = tmp_path / "requirements.txt"
+    manifest.write_text("pyyaml==5.3.1\n")
+    return manifest
+
+
+class _RecordingRun:
+    """Stub for cs._run: records every cmd, returns a canned (rc, stdout, stderr)."""
+
+    def __init__(self, rc, stdout, stderr=""):
+        self.rc = rc
+        self.stdout = stdout
+        self.stderr = stderr
+        self.calls = []
+
+    def __call__(self, cmd, cwd=None):
+        self.calls.append(cmd)
+        return self.rc, self.stdout, self.stderr
+
+
+def _patch_dep_scan_only(monkeypatch):
+    monkeypatch.setattr(cs, "_have", lambda tool: tool == "dep-scan")
+
+
+def test_deprecated_json_flag_gone_documented_flag_present():
+    """T-001-01."""
+    cli_text = open(CLI, encoding="utf-8").read()
+    scan_commands_text = open(SCAN_COMMANDS_MD, encoding="utf-8").read()
+
+    assert not _JSON_FLAG.search(cli_text), \
+        "cli/code-scanner must not invoke dep-scan with the deprecated --json flag"
+    assert not _JSON_FLAG.search(scan_commands_text), \
+        "scan-commands.md must not document the deprecated --json flag"
+    assert cli_text.count('"--format", "json"') >= 2
+    assert len(re.findall(r"dep-scan check[^\n]*--format json",
+                           scan_commands_text)) >= 6
+
+
+def test_run_dep_scan_command_shape_lockfile_mode(tmp_path, monkeypatch):
+    """T-001-02."""
+    manifest = _write_pyyaml_manifest(tmp_path)
+    _patch_dep_scan_only(monkeypatch)
+    stub = _RecordingRun(0, "[]", "")
+    monkeypatch.setattr(cs, "_run", stub)
+
+    result = cs.run_dep_scan(str(tmp_path))
+
+    assert stub.calls == [
+        ["dep-scan", "check", "--lockfile", str(manifest),
+         "--lockfile-type", "pypi", "--format", "json"]
+    ]
+    assert result == []
+
+
+def test_run_dep_scan_command_shape_name_mode(tmp_path, monkeypatch):
+    """T-001-03."""
+    pkg = tmp_path / "package.json"
+    pkg.write_text(json.dumps({"dependencies": {"left-pad": "^1.0.0"}}))
+    _patch_dep_scan_only(monkeypatch)
+    stub = _RecordingRun(0, "[]", "")
+    monkeypatch.setattr(cs, "_run", stub)
+
+    cs.run_dep_scan(str(tmp_path))
+
+    assert stub.calls == [
+        ["dep-scan", "check", "left-pad", "--registry", "npm", "--format", "json"]
+    ]
+
+
+def test_fake_dep_scan_rejects_deprecated_json_flag(tmp_path):
+    """T-001-04."""
+    clean_cwd = tmp_path / "clean-target"
+    clean_cwd.mkdir()
+
+    ok = subprocess.run(
+        [sys.executable, FAKE_DEP_SCAN, "check", "--lockfile", "x",
+         "--lockfile-type", "pypi", "--format", "json"],
+        cwd=str(clean_cwd), capture_output=True, text=True, check=False,
+    )
+    assert ok.returncode == 0
+    assert json.loads(ok.stdout) == []
+
+    rejected = subprocess.run(
+        [sys.executable, FAKE_DEP_SCAN, "check", "--lockfile", "x",
+         "--lockfile-type", "pypi", "--json"],
+        cwd=str(clean_cwd), capture_output=True, text=True, check=False,
+    )
+    assert rejected.returncode == 2
+    assert rejected.stdout == ""
+    assert "--json" in rejected.stderr
+
+
+def test_dep_scan_entries_bare_array_passes_through():
+    """T-001-05."""
+    data = [{"package": "a"}, {"package": "b"}]
+    assert cs._dep_scan_entries(data) == data
+
+
+def test_dep_scan_entries_transitive_shape_unwraps_results():
+    """T-001-06."""
+    data = {"results": [{"package": "a"}],
+            "transitive": {"worst_verdict": "block", "diagnostics": [], "nodes": []}}
+    assert cs._dep_scan_entries(data) == [{"package": "a"}]
+
+
+@pytest.mark.parametrize("bad", ["oops", 42, None, {"no_results_key": 1}])
+def test_dep_scan_entries_unknown_shapes_yield_empty_list(bad):
+    """T-001-07."""
+    assert cs._dep_scan_entries(bad) == []
+
+
+def test_run_dep_scan_per_policy_mapping_mixed(tmp_path, monkeypatch):
+    """T-001-08."""
+    _write_pyyaml_manifest(tmp_path)
+    _patch_dep_scan_only(monkeypatch)
+    entry = {
+        "package": "PyYAML", "version": "5.3.1", "registry": "pypi",
+        "age_hours": 40000, "result": "block",
+        "reason": "Found known vulnerability(ies): GHSA-8q59-q68h-6hv4",
+        "policies": [
+            {"policy_name": "age", "result": "pass", "reason": None},
+            {"policy_name": "typosquatting", "result": "warn",
+             "reason": "similar to 'pyaml'"},
+            {"policy_name": "vulnerability", "result": "block",
+             "reason": "Found known vulnerability(ies): GHSA-8q59-q68h-6hv4"},
+        ],
+    }
+    stub = _RecordingRun(1, json.dumps([entry]), "")
+    monkeypatch.setattr(cs, "_run", stub)
+
+    findings = cs.run_dep_scan(str(tmp_path))
+
+    assert len(findings) == 2
+    by_rule = {f.rule_id: f for f in findings}
+
+    typo = by_rule["dep-scan/typosquatting"]
+    assert typo.severity == "MEDIUM"
+    assert typo.message == "PyYAML@5.3.1: similar to 'pyaml'"
+    assert typo.driver == "dep-scan"
+    assert typo.tier == cs.TIER_DETERMINISTIC
+    assert typo.path.endswith("requirements.txt")
+
+    vuln = by_rule["dep-scan/vulnerability"]
+    assert vuln.severity == "HIGH"
+    assert ("PyYAML@5.3.1: Found known vulnerability(ies): GHSA-8q59-q68h-6hv4"
+            in vuln.message)
+    assert vuln.path.endswith("requirements.txt")
+
+
+def test_run_dep_scan_warm_cache_sentinel_does_not_gate(tmp_path, monkeypatch, capsys):
+    """T-001-09."""
+    _write_pyyaml_manifest(tmp_path)
+    _patch_dep_scan_only(monkeypatch)
+    entry = {
+        "package": "PyYAML", "version": "cached", "registry": "pypi",
+        "age_hours": None, "result": "block", "reason": "cached result",
+        "policies": [],
+    }
+    stub = _RecordingRun(1, json.dumps([entry]), "")
+    monkeypatch.setattr(cs, "_run", stub)
+
+    findings = cs.run_dep_scan(str(tmp_path))
+
+    assert findings == []
+    err = capsys.readouterr().err
+    assert "unattributable" in err
+    assert "not gating" in err
+
+
+def test_run_dep_scan_unparseable_stdout_raises_tool_error(tmp_path, monkeypatch):
+    """T-001-10."""
+    _write_pyyaml_manifest(tmp_path)
+    _patch_dep_scan_only(monkeypatch)
+    stub = _RecordingRun(1, "not json {", "")
+    monkeypatch.setattr(cs, "_run", stub)
+
+    with pytest.raises(cs.ToolError, match="unparseable JSON"):
+        cs.run_dep_scan(str(tmp_path))
+
+
+def test_run_dep_scan_rc2_empty_stdout_raises_tool_error(tmp_path, monkeypatch):
+    """T-001-11."""
+    _write_pyyaml_manifest(tmp_path)
+    _patch_dep_scan_only(monkeypatch)
+    stub = _RecordingRun(2, "", "boom: config invalid")
+    monkeypatch.setattr(cs, "_run", stub)
+
+    with pytest.raises(cs.ToolError, match=r"rc=2"):
+        cs.run_dep_scan(str(tmp_path))
+
+
+def test_run_dep_scan_rc1_with_parseable_output_is_not_a_failure(tmp_path, monkeypatch):
+    """T-001-11 (counter-case)."""
+    _write_pyyaml_manifest(tmp_path)
+    _patch_dep_scan_only(monkeypatch)
+    stub = _RecordingRun(1, "[]", "")
+    monkeypatch.setattr(cs, "_run", stub)
+
+    assert cs.run_dep_scan(str(tmp_path)) == []
+
+
+def test_end_to_end_exit_codes_preserved_0_1_2_64():
+    """T-001-12: the explicit non-regression gate for the flag switch."""
+    rc, _, err = run_cli(CLEAN, path=fake_path())
+    assert rc == EXIT_CLEAN, f"expected 0 (clean), got {rc}\n{err}"
+
+    rc, sarif, err = run_cli(VULN, path=fake_path())
+    assert rc == EXIT_FINDINGS, f"expected 1 (findings), got {rc}\n{err}"
+    errs = error_results_from_deterministic(sarif)
+    assert any(r["ruleId"] == "dep-scan/vulnerability" for _, r in errs), \
+        "expected an error-level dep-scan/vulnerability result from the fake's block policy"
+
+    rc, _, err = run_cli(CLEAN, path=minimal_path())
+    assert rc == EXIT_TOOL_FAILURE, f"expected 2 (no deterministic tools), got {rc}\n{err}"
+
+    rc, _, err = run_cli(CLEAN, "--severity-threshold", "BOGUS", path=fake_path())
+    assert rc == EXIT_USAGE, f"expected 64 (usage), got {rc}\n{err}"
 
 
 # --- opt-in real-tools integration ---------------------------------------------
