@@ -20,7 +20,7 @@ RUN go install github.com/google/osv-scanner/v2/cmd/osv-scanner@${OSV_SCANNER_VE
 # --- stage 2: the runner --------------------------------------------------------
 FROM python:3.12-slim
 
-ARG DEP_SCAN_VERSION=v1.3.1
+ARG DEP_SCAN_VERSION=v1.4.0
 ARG SEMGREP_VERSION=1.97.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -30,18 +30,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # osv-scanner (from the build stage)
 COPY --from=osv /go/bin/osv-scanner /usr/local/bin/osv-scanner
 
-# dep-scan — pinned release binary (same source as Dockerfile.dep-scan)
-RUN ARCH="$(uname -m)" && \
-    case "$ARCH" in \
-      x86_64|amd64)  TARGET="x86_64-unknown-linux-gnu" ;; \
-      aarch64|arm64) TARGET="aarch64-unknown-linux-gnu" ;; \
-      *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
-    esac && \
-    curl -fsSL "https://github.com/tkdtaylor/dep-scan/releases/download/${DEP_SCAN_VERSION}/dep-scan-${DEP_SCAN_VERSION}-${TARGET}.tar.gz" \
-      -o /tmp/dep-scan.tar.gz && \
-    tar xzf /tmp/dep-scan.tar.gz -C /usr/local/bin && \
-    chmod +x /usr/local/bin/dep-scan && \
-    rm /tmp/dep-scan.tar.gz
+# dep-scan — pinned release binary (same install.sh channel as Dockerfile.dep-scan)
+RUN VERSION="${DEP_SCAN_VERSION:-$(curl -fsSL https://raw.githubusercontent.com/tkdtaylor/dep-scan/main/PINNED_VERSION | tr -d '[:space:]')}" && \
+    test -n "$VERSION" && \
+    curl -fsSL https://raw.githubusercontent.com/tkdtaylor/dep-scan/main/install.sh \
+      | INSTALL_DIR=/usr/local/bin bash -s -- --version="${VERSION}" && \
+    dep-scan --version | grep -F -- "${VERSION#v}"
 
 # semgrep + pytest. semgrep's vendored opentelemetry imports pkg_resources, which
 # slim Python images no longer bundle AND setuptools >= 81 has removed — so pin

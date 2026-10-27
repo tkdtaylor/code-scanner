@@ -231,57 +231,65 @@ docker run --rm \
   sh -c '
     found_any=false
 
-    # npm dependencies — prefer the lockfile so dep-scan can walk the
-    # transitive graph (--transitive only reaches depth > 0 with a lockfile;
-    # bare package names stay at depth 0). Fall back to package.json names
-    # when no lockfile is present.
+    # JS/TS dependencies (package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lock)
+    # Prefer lockfiles so dep-scan can walk the transitive graph (--transitive
+    # reaches depth > 0 with a lockfile; bare package names stay at depth 0).
+    # Fall back to package.json names when no lockfile is present in that dir.
+    for lf in $(find /scan/repo \( -name "package-lock.json" -o -name "pnpm-lock.yaml" -o -name "yarn.lock" -o -name "bun.lock" \) -not -path "*/node_modules/*" -not -path "*/.git/*"); do
+      found_any=true
+      echo "=== JS/TS deps from ${lf#/scan/repo/} (transitive) ==="
+      dep-scan check --lockfile "$lf" --transitive --format json 2>&1
+    done
     for pj in $(find /scan/repo -name package.json -not -path "*/node_modules/*" -not -path "*/.git/*"); do
-      lock="$(dirname "$pj")/package-lock.json"
-      if [ -f "$lock" ]; then
-        found_any=true
-        echo "=== npm deps from ${lock#/scan/repo/} (transitive) ==="
-        dep-scan check --registry npm --lockfile "$lock" --transitive --format json 2>&1
-      else
+      dir="$(dirname "$pj")"
+      if [ ! -f "$dir/package-lock.json" ] && [ ! -f "$dir/pnpm-lock.yaml" ] && [ ! -f "$dir/yarn.lock" ] && [ ! -f "$dir/bun.lock" ]; then
         deps=$(jq -r "(.dependencies // {}) + (.devDependencies // {}) | keys[]" "$pj" 2>/dev/null | tr "\n" " ")
         if [ -n "$deps" ]; then
           found_any=true
-          echo "=== npm deps from ${pj#/scan/repo/} (direct only — no lockfile) ==="
+          echo "=== npm deps from ${pj#/scan/repo/} (direct only - no lockfile) ==="
           dep-scan check $deps --registry npm --format json 2>&1
         fi
       fi
     done
 
-    # PyPI dependencies (from requirements*.txt)
+    # PyPI dependencies (from requirements*.txt - PEP 508 & git-ref aware via --lockfile-type pypi)
     for req in $(find /scan/repo \( -name "requirements.txt" -o -name "requirements-*.txt" -o -name "requirements_*.txt" \) -not -path "*/.git/*"); do
-      deps=$(grep -v "^\s*#" "$req" | grep -v "^\s*$" | grep -v "^\s*-" | sed "s/[>=<!\[].*//" | sed "s/\s*$//" | tr "\n" " ")
-      if [ -n "$deps" ]; then
-        found_any=true
-        echo "=== PyPI deps from ${req#/scan/repo/} ==="
-        dep-scan check $deps --registry pypi --format json 2>&1
-      fi
+      found_any=true
+      echo "=== PyPI deps from ${req#/scan/repo/} ==="
+      dep-scan check --lockfile "$req" --lockfile-type pypi --format json 2>&1
     done
 
-    # PyPI dependencies (from pyproject.toml — extract [project.dependencies])
+    # Python lockfiles (uv.lock, poetry.lock, Pipfile.lock, pylock*.toml)
+    for plf in $(find /scan/repo \( -name "uv.lock" -o -name "poetry.lock" -o -name "Pipfile.lock" -o -name "pylock.toml" -o -name "pylock.*.toml" \) -not -path "*/.git/*"); do
+      found_any=true
+      echo "=== Python lockfile deps from ${plf#/scan/repo/} (transitive) ==="
+      dep-scan check --lockfile "$plf" --transitive --format json 2>&1
+    done
+
+    # PyPI dependencies (from pyproject.toml when no Python lockfile is in the same directory)
     for pp in $(find /scan/repo -name "pyproject.toml" -not -path "*/.git/*"); do
-      if grep -q "\[project\]" "$pp" 2>/dev/null; then
-        deps=$(sed -n "/^dependencies\s*=/,/^\]/p" "$pp" 2>/dev/null \
-          | grep -oE "\"[a-zA-Z0-9_-]+\"" | tr -d "\"" | tr "\n" " ")
-        if [ -n "$deps" ]; then
-          found_any=true
-          echo "=== PyPI deps from ${pp#/scan/repo/} ==="
-          dep-scan check $deps --registry pypi --format json 2>&1
+      dir="$(dirname "$pp")"
+      if [ ! -f "$dir/uv.lock" ] && [ ! -f "$dir/poetry.lock" ] && [ ! -f "$dir/Pipfile.lock" ] && [ ! -f "$dir/pylock.toml" ]; then
+        if grep -q "\[project\]" "$pp" 2>/dev/null; then
+          deps=$(sed -n "/^dependencies\s*=/,/^\]/p" "$pp" 2>/dev/null \
+            | grep -oE "\"[a-zA-Z0-9_-]+\"" | tr -d "\"" | tr "\n" " ")
+          if [ -n "$deps" ]; then
+            found_any=true
+            echo "=== PyPI deps from ${pp#/scan/repo/} ==="
+            dep-scan check $deps --registry pypi --format json 2>&1
+          fi
         fi
       fi
     done
 
-    # Rust crates (from Cargo.lock — carries the full resolved graph)
+    # Rust crates (from Cargo.lock - carries the full resolved graph)
     for cl in $(find /scan/repo -name "Cargo.lock" -not -path "*/.git/*"); do
       found_any=true
       echo "=== crates from ${cl#/scan/repo/} (transitive) ==="
       dep-scan check --registry crates --lockfile "$cl" --transitive --format json 2>&1
     done
 
-    # Go modules (from go.sum — already the flattened transitive set)
+    # Go modules (from go.sum - already the flattened transitive set)
     for gs in $(find /scan/repo -name "go.sum" -not -path "*/.git/*"); do
       found_any=true
       echo "=== go modules from ${gs#/scan/repo/} (transitive) ==="
@@ -289,7 +297,7 @@ docker run --rm \
     done
 
     if [ "$found_any" = false ]; then
-      echo "No dependency manifests found (package.json, requirements*.txt, pyproject.toml, Cargo.lock, go.sum)."
+      echo "No dependency manifests found (package.json, package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lock, requirements*.txt, uv.lock, poetry.lock, Pipfile.lock, pylock*.toml, pyproject.toml, Cargo.lock, go.sum)."
     fi
   '
 ```
@@ -298,22 +306,22 @@ docker run --rm \
 
 dep-scan emits JSON when `--format json` is used. There are **two shapes** depending on whether `--transitive` was passed:
 
-- **Without `--transitive`** (name-based calls — PyPI manifests): a JSON **array** of package entries.
-- **With `--transitive`** (lockfile-based calls — npm `package-lock.json`, Rust `Cargo.lock`, Go `go.sum`): a JSON **object** `{ "results": [...], "transitive": { "nodes": [...], "worst_verdict": ..., "diagnostics": [...] } }`. `results` is the same per-package array; `transitive.nodes` lists every resolved node with its `depth` (0 = direct dependency, > 0 = transitive) and `verdict`; `worst_verdict` rolls up the whole tree; `diagnostics` records any nodes that could not be resolved/fetched.
+- **Without `--transitive`** (`requirements*.txt` or name-based calls from `package.json` / `pyproject.toml`): a JSON **array** of package entries.
+- **With `--transitive`** (lockfile-based calls: JS/TS `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock` / `bun.lock`, Python `uv.lock` / `poetry.lock` / `Pipfile.lock` / `pylock*.toml`, Rust `Cargo.lock`, Go `go.sum`): a JSON **object** `{ "results": [...], "transitive": { "nodes": [...], "worst_verdict": ..., "diagnostics": [...] } }`. `results` is the same per-package array; `transitive.nodes` lists every resolved node with its `depth` (0 = direct dependency, > 0 = transitive) and `verdict`; `worst_verdict` rolls up the whole tree; `diagnostics` records any nodes that could not be resolved/fetched.
 
 Each package entry in `results` includes a top-level `result` field and a per-policy breakdown:
 
 | dep-scan result / verdict | Code Scanner severity | Action |
 |-----------------|-------------------|--------|
-| `block` | HIGH | Record as finding — the dependency failed a blocking policy |
-| `warn` | MEDIUM | Record as finding — the dependency triggered a warning |
-| `pass` | — | No action needed |
+| `block` | HIGH | Record as finding: the dependency failed a blocking policy |
+| `warn` | MEDIUM | Record as finding: the dependency triggered a warning |
+| `pass` | - | No action needed |
 
-For transitive findings, record the **depth** and the path context (a malicious package pulled in indirectly is still a real risk — note it was a transitive dependency at depth N, not declared directly). Also surface any non-empty `transitive.diagnostics` in the report, since an unresolved node means part of the tree went unscanned.
+For transitive findings, record the **depth** and the path context (a malicious package pulled in indirectly is still a real risk; note it was a transitive dependency at depth N, not declared directly). Also surface any non-empty `transitive.diagnostics` in the report, since an unresolved node means part of the tree went unscanned.
 
 dep-scan exit code `1` means at least one policy violation was found. Exit code `0` means all clean.
 
-The eleven policies checked: **age** (< 48h), **install_scripts** (eval/exec/subprocess in hooks), **obfuscation** (obfuscated package code), **typosquatting** (Levenshtein distance to popular packages), **vulnerability** (CVEs via OSV.dev), **popularity** (very-low-adoption packages), **maintainer_change** (ownership transfers), **dependency_confusion** (internal-looking names on public registries), **npm_provenance** / **pypi_provenance** (no published provenance attestation — frequently `warn`s for otherwise-fine packages, so treat a lone provenance warning as low-signal MEDIUM), **go_sumdb** (Go checksum-database verification).
+The 12 policies checked: **age** (< 48h), **install_scripts** (eval/exec/subprocess in hooks), **obfuscation** (obfuscated package code), **typosquatting** (Levenshtein distance to popular packages), **vulnerability** (CVEs via OSV.dev), **popularity** (very-low-adoption packages), **maintainer_change** (ownership transfers), **dependency_confusion** (internal-looking names on public registries), **npm_provenance** / **pypi_provenance** (no published provenance attestation; frequently `warn`s for otherwise-fine packages, so treat a lone provenance warning as low-signal MEDIUM), **go_sumdb** (Go checksum-database verification), **git_mutable_ref** (unpinned branch/tag git dependencies).
 
 ---
 
@@ -629,57 +637,65 @@ docker run --rm \
   sh -c '
     found_any=false
 
-    # npm dependencies — prefer the lockfile so dep-scan can walk the
-    # transitive graph (--transitive only reaches depth > 0 with a lockfile;
-    # bare package names stay at depth 0). Fall back to package.json names
-    # when no lockfile is present.
+    # JS/TS dependencies (package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lock)
+    # Prefer lockfiles so dep-scan can walk the transitive graph (--transitive
+    # reaches depth > 0 with a lockfile; bare package names stay at depth 0).
+    # Fall back to package.json names when no lockfile is present in that dir.
+    for lf in $(find /scan/repo \( -name "package-lock.json" -o -name "pnpm-lock.yaml" -o -name "yarn.lock" -o -name "bun.lock" \) -not -path "*/node_modules/*" -not -path "*/.git/*"); do
+      found_any=true
+      echo "=== JS/TS deps from ${lf#/scan/repo/} (transitive) ==="
+      dep-scan check --lockfile "$lf" --transitive --format json 2>&1
+    done
     for pj in $(find /scan/repo -name package.json -not -path "*/node_modules/*" -not -path "*/.git/*"); do
-      lock="$(dirname "$pj")/package-lock.json"
-      if [ -f "$lock" ]; then
-        found_any=true
-        echo "=== npm deps from ${lock#/scan/repo/} (transitive) ==="
-        dep-scan check --registry npm --lockfile "$lock" --transitive --format json 2>&1
-      else
+      dir="$(dirname "$pj")"
+      if [ ! -f "$dir/package-lock.json" ] && [ ! -f "$dir/pnpm-lock.yaml" ] && [ ! -f "$dir/yarn.lock" ] && [ ! -f "$dir/bun.lock" ]; then
         deps=$(jq -r "(.dependencies // {}) + (.devDependencies // {}) | keys[]" "$pj" 2>/dev/null | tr "\n" " ")
         if [ -n "$deps" ]; then
           found_any=true
-          echo "=== npm deps from ${pj#/scan/repo/} (direct only — no lockfile) ==="
+          echo "=== npm deps from ${pj#/scan/repo/} (direct only - no lockfile) ==="
           dep-scan check $deps --registry npm --format json 2>&1
         fi
       fi
     done
 
-    # PyPI dependencies (from requirements*.txt)
+    # PyPI dependencies (from requirements*.txt - PEP 508 & git-ref aware via --lockfile-type pypi)
     for req in $(find /scan/repo \( -name "requirements.txt" -o -name "requirements-*.txt" -o -name "requirements_*.txt" \) -not -path "*/.git/*"); do
-      deps=$(grep -v "^\s*#" "$req" | grep -v "^\s*$" | grep -v "^\s*-" | sed "s/[>=<!\[].*//" | sed "s/\s*$//" | tr "\n" " ")
-      if [ -n "$deps" ]; then
-        found_any=true
-        echo "=== PyPI deps from ${req#/scan/repo/} ==="
-        dep-scan check $deps --registry pypi --format json 2>&1
-      fi
+      found_any=true
+      echo "=== PyPI deps from ${req#/scan/repo/} ==="
+      dep-scan check --lockfile "$req" --lockfile-type pypi --format json 2>&1
     done
 
-    # PyPI dependencies (from pyproject.toml — extract [project.dependencies])
+    # Python lockfiles (uv.lock, poetry.lock, Pipfile.lock, pylock*.toml)
+    for plf in $(find /scan/repo \( -name "uv.lock" -o -name "poetry.lock" -o -name "Pipfile.lock" -o -name "pylock.toml" -o -name "pylock.*.toml" \) -not -path "*/.git/*"); do
+      found_any=true
+      echo "=== Python lockfile deps from ${plf#/scan/repo/} (transitive) ==="
+      dep-scan check --lockfile "$plf" --transitive --format json 2>&1
+    done
+
+    # PyPI dependencies (from pyproject.toml when no Python lockfile is in the same directory)
     for pp in $(find /scan/repo -name "pyproject.toml" -not -path "*/.git/*"); do
-      if grep -q "\[project\]" "$pp" 2>/dev/null; then
-        deps=$(sed -n "/^dependencies\s*=/,/^\]/p" "$pp" 2>/dev/null \
-          | grep -oE "\"[a-zA-Z0-9_-]+\"" | tr -d "\"" | tr "\n" " ")
-        if [ -n "$deps" ]; then
-          found_any=true
-          echo "=== PyPI deps from ${pp#/scan/repo/} ==="
-          dep-scan check $deps --registry pypi --format json 2>&1
+      dir="$(dirname "$pp")"
+      if [ ! -f "$dir/uv.lock" ] && [ ! -f "$dir/poetry.lock" ] && [ ! -f "$dir/Pipfile.lock" ] && [ ! -f "$dir/pylock.toml" ]; then
+        if grep -q "\[project\]" "$pp" 2>/dev/null; then
+          deps=$(sed -n "/^dependencies\s*=/,/^\]/p" "$pp" 2>/dev/null \
+            | grep -oE "\"[a-zA-Z0-9_-]+\"" | tr -d "\"" | tr "\n" " ")
+          if [ -n "$deps" ]; then
+            found_any=true
+            echo "=== PyPI deps from ${pp#/scan/repo/} ==="
+            dep-scan check $deps --registry pypi --format json 2>&1
+          fi
         fi
       fi
     done
 
-    # Rust crates (from Cargo.lock — carries the full resolved graph)
+    # Rust crates (from Cargo.lock - carries the full resolved graph)
     for cl in $(find /scan/repo -name "Cargo.lock" -not -path "*/.git/*"); do
       found_any=true
       echo "=== crates from ${cl#/scan/repo/} (transitive) ==="
       dep-scan check --registry crates --lockfile "$cl" --transitive --format json 2>&1
     done
 
-    # Go modules (from go.sum — already the flattened transitive set)
+    # Go modules (from go.sum - already the flattened transitive set)
     for gs in $(find /scan/repo -name "go.sum" -not -path "*/.git/*"); do
       found_any=true
       echo "=== go modules from ${gs#/scan/repo/} (transitive) ==="
@@ -687,7 +703,7 @@ docker run --rm \
     done
 
     if [ "$found_any" = false ]; then
-      echo "No dependency manifests found (package.json, requirements*.txt, pyproject.toml, Cargo.lock, go.sum)."
+      echo "No dependency manifests found (package.json, package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lock, requirements*.txt, uv.lock, poetry.lock, Pipfile.lock, pylock*.toml, pyproject.toml, Cargo.lock, go.sum)."
     fi
   '
 ```

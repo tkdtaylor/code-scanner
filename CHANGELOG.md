@@ -9,13 +9,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- **Headless CLI gate mode** — `code-scanner` on PATH with a machine-checkable
+- **Headless CLI gate mode**: `code-scanner` on PATH with a machine-checkable
   exit-code contract (ADR-002), SARIF self-validation before emit (fail closed
   on malformed output), and a containerized real-tools integration runner.
 - Agentic **skill + MCP-server threat coverage** (prompt injection, embedded
   commands, exfiltration, excessive agency, memory poisoning, trigger abuse).
-- Rust (`Cargo.lock`) and Go (`go.sum`) transitive dependency scanning via
-  dep-scan, with crates.io + Go proxy/sumdb on the network allow-lists.
+- Expanded **dep-scan v1.4.0 lockfile coverage**: JS/TS (`pnpm-lock.yaml`,
+  `yarn.lock`, `bun.lock`) and Python (`uv.lock`, `poetry.lock`,
+  `Pipfile.lock`, PEP 751 `pylock.toml` / `pylock.*.toml`, and PEP 508
+  `requirements*.txt` lockfile mode) alongside `package-lock.json`, Rust
+  `Cargo.lock`, and Go `go.sum`, with crates.io + Go proxy/sumdb on the network
+  allow-lists.
 - SARIF findings format adopted as the report interchange format (ADR-001).
 - Semgrep pinned to a bundled offline ruleset (no `--config auto` network
   dependency at scan time).
@@ -26,15 +30,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 - **Relicensed to Apache-2.0** (from PolyForm Noncommercial 1.0.0), with SPDX
   headers, NOTICE, DCO sign-off, and contribution guide.
 - Rebranded from CodeScan to Code Scanner.
-- The gate CLI now gates on an attributed dep-scan cache hit (dep-scan task
-  112: real version, full `policies` array, additive `cache` object) exactly
-  like a fresh scan. Only a legacy pre-112 cache sentinel (`version: "cached"`,
-  empty `policies`) is still refused, fail closed.
-- `Dockerfile.dep-scan` installs dep-scan via dep-scan's own `install.sh`
-  (checksum-verified) at the version named in dep-scan's published
-  `PINNED_VERSION` file, instead of an independent hardcoded tag. Override
-  with `--build-arg DEP_SCAN_VERSION=vX.Y.Z` for deterministic builds or
-  rollback.
+- The gate CLI now gates on an attributed dep-scan cache hit (dep-scan v1.4.0 /
+  task 112: real version, full `policies` array, additive `cache` object)
+  exactly like a fresh scan. Only a legacy pre-112 cache sentinel (`version:
+  "cached"`, empty `policies`) is still refused, fail closed.
+- `Dockerfile.dep-scan` and `tests/docker/Dockerfile` install dep-scan v1.4.0+
+  via dep-scan's own `install.sh` (checksum-verified) at the version named in
+  dep-scan's published `PINNED_VERSION` file, instead of an independent
+  hardcoded tarball fetch. Override with `--build-arg DEP_SCAN_VERSION=vX.Y.Z`
+  for deterministic builds or rollback.
 
 ### Fixed
 
@@ -44,7 +48,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   behavior change; guards against the alias disappearing on a future dep-scan
   major version.
 
-## [1.1.0] — 2026-03-22
+## [1.1.0] - 2026-03-22
 
 ### Added
 
@@ -54,7 +58,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 - dep-scan supply-chain analysis integration; LiteLLM-class supply-chain
   attack detection.
 
-## [1.0.0] — 2026-03-21
+## [1.0.0] - 2026-03-21
 
 ### Added
 

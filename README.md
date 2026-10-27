@@ -70,7 +70,7 @@ Local path (folder already on disk)
 
 | Category | Detection |
 |----------|-----------|
-| **CVE / Dependencies** | Known vulnerabilities (OSV database), typosquatting, package age < 48h, maintainer changes, dependency confusion, transitive-tree scanning (npm, Rust, Go lockfiles) |
+| **CVE / Dependencies** | Known vulnerabilities (OSV database), typosquatting, package age < 48h, maintainer changes, dependency confusion, transitive-tree scanning (JS/TS `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock` / `bun.lock`, Python `uv.lock` / `poetry.lock` / `Pipfile.lock` / `pylock*.toml`, Rust `Cargo.lock`, Go `go.sum`) |
 | **Malware patterns** | Base64/hex payloads, eval/exec patterns, `curl \| bash`, credential harvesting, reverse shells, cryptominers, web shells, C2 infrastructure, persistence mechanisms |
 | **Supply chain** | Malicious install hooks (postinstall, setup.py, `__init__.py`), Python `.pth` persistence, unpinned CI/CD actions |
 | **Recursive payloads** | Secondary download URLs fetched and inspected inside the sandbox |

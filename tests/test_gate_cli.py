@@ -96,16 +96,19 @@ def dep_scan_only_path():
     against VULN under the full `fake_path()` always gates regardless of what
     dep-scan reports. Task 002's cached-legacy e2e assertion needs a PATH where
     dep-scan is the only deterministic tool, so its own refusal to gate on an
-    unattributed cache sentinel is what determines the exit code.
+    unattributed cache sentinel is what determines the exit code. Symlinks
+    `python3` into the isolated dir (like `minimal_path()`) so that in the
+    container image (where `python3` and real `osv-scanner`/`semgrep` share
+    `/usr/local/bin`) the real scanner binaries cannot leak onto PATH.
     """
     global _DEP_SCAN_ONLY_DIR
     if _DEP_SCAN_ONLY_DIR is None:
         import tempfile
         d = tempfile.mkdtemp(prefix="cs-depscan-only-")
         os.symlink(os.path.join(FAKE_TOOLS, "dep-scan"), os.path.join(d, "dep-scan"))
+        os.symlink(sys.executable, os.path.join(d, "python3"))
         _DEP_SCAN_ONLY_DIR = d
-    interp = os.path.dirname(sys.executable)
-    return os.pathsep.join([_DEP_SCAN_ONLY_DIR, interp, "/usr/bin", "/bin"])
+    return os.pathsep.join([_DEP_SCAN_ONLY_DIR, "/usr/bin", "/bin"])
 
 
 _MINIMAL_DIR = None
@@ -362,7 +365,7 @@ def _attributed_cached_entry():
         "age_hours": None, "result": "block",
         "reason": "Found known vulnerability(ies): GHSA-8q59-q68h-6hv4",
         "cache": {"hit": True, "scanned_at": "2026-07-10T08:15:00Z",
-                  "dep_scan_version": "1.3.1"},
+                  "dep_scan_version": "1.4.0"},
         "policies": [
             {"policy_name": "age", "result": "pass", "reason": None},
             {"policy_name": "vulnerability", "result": "block",
@@ -444,6 +447,39 @@ def test_run_dep_scan_command_shape_name_mode(tmp_path, monkeypatch):
 
     assert stub.calls == [
         ["dep-scan", "check", "left-pad", "--registry", "npm", "--format", "json"]
+    ]
+
+
+@pytest.mark.parametrize("filename,expected_type,companion", [
+    ("pnpm-lock.yaml", "pnpm", "package.json"),
+    ("yarn.lock", "yarn", "package.json"),
+    ("bun.lock", "bun", "package.json"),
+    ("uv.lock", "uv", "pyproject.toml"),
+    ("poetry.lock", "poetry", "pyproject.toml"),
+    ("Pipfile.lock", "pipenv", "pyproject.toml"),
+    ("pylock.toml", "pylock", "pyproject.toml"),
+    ("pylock.dev.toml", "pylock", "pyproject.toml"),
+])
+def test_run_dep_scan_v1_4_lockfile_types_and_precedence(
+    filename, expected_type, companion, tmp_path, monkeypatch,
+):
+    """dep-scan v1.4.0 lockfiles run in lockfile mode and suppress name-mode fallback."""
+    lock = tmp_path / filename
+    lock.write_text("# lockfile\n")
+    comp = tmp_path / companion
+    if companion == "package.json":
+        comp.write_text(json.dumps({"dependencies": {"left-pad": "^1.0.0"}}))
+    else:
+        comp.write_text('[project]\ndependencies = ["requests"]\n')
+    _patch_dep_scan_only(monkeypatch)
+    stub = _RecordingRun(0, "[]", "")
+    monkeypatch.setattr(cs, "_run", stub)
+
+    cs.run_dep_scan(str(tmp_path))
+
+    assert stub.calls == [
+        ["dep-scan", "check", "--lockfile", str(lock),
+         "--lockfile-type", expected_type, "--format", "json"]
     ]
 
 
@@ -789,7 +825,7 @@ def test_dockerfile_static_contract():
 
 
 DOCKER = shutil.which("docker")
-_KNOWN_GOOD_PIN = "v1.3.1"
+_KNOWN_GOOD_PIN = "v1.4.0"
 
 
 @pytest.mark.skipif(not DOCKER, reason="docker not available")
@@ -824,6 +860,35 @@ def test_docker_build_bogus_version_fails_closed():
     )
     assert build.returncode != 0, "build must fail closed on a nonexistent release"
     subprocess.run([DOCKER, "rmi", "-f", tag], capture_output=True, check=False)
+
+
+@pytest.mark.skipif(not DOCKER, reason="docker not available")
+def test_docker_build_channel_path_fetches_pinned_version():
+    """T-002-12: build with no DEP_SCAN_VERSION arg fetches PINNED_VERSION."""
+    pin_proc = subprocess.run(
+        ["curl", "-fsSL",
+         "https://raw.githubusercontent.com/tkdtaylor/dep-scan/main/PINNED_VERSION"],
+        capture_output=True, text=True, check=False,
+    )
+    assert pin_proc.returncode == 0, f"failed to fetch PINNED_VERSION: {pin_proc.stderr}"
+    expected_pin = pin_proc.stdout.strip().lstrip("v")
+    assert expected_pin, "PINNED_VERSION must not be empty"
+
+    tag = "dep-scan:t002-channel"
+    build = subprocess.run(
+        [DOCKER, "build", "-f", DEP_SCAN_DOCKERFILE, "-t", tag, REPO],
+        capture_output=True, text=True, check=False,
+    )
+    assert build.returncode == 0, f"build failed:\n{build.stdout}\n{build.stderr}"
+    try:
+        run = subprocess.run(
+            [DOCKER, "run", "--rm", "--entrypoint", "dep-scan", tag, "--version"],
+            capture_output=True, text=True, check=False,
+        )
+        assert run.returncode == 0, run.stderr
+        assert expected_pin in run.stdout, run.stdout
+    finally:
+        subprocess.run([DOCKER, "rmi", "-f", tag], capture_output=True, check=False)
 
 
 # --- comment/caveat hygiene (task 002) ------------------------------------------

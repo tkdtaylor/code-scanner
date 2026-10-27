@@ -66,11 +66,13 @@ A missing tool reduces coverage (recorded as a stderr note); missing *all three*
 is a fail-closed `2`. The CLI itself is a single stdlib-only Python 3 script — no
 pip install, no compile step.
 
-> **dep-scan caching caveat.** dep-scan keeps an on-disk cache; a cache hit can
-> return a bare `block`/`warn` with no policy detail (`version: "cached"`, empty
-> `policies`). Because that verdict is unattributable and not reproducible, the
-> CLI does **not** gate on it (it logs a coverage note instead). For reproducible
-> version-specific CVE gating, keep `osv-scanner` on PATH.
+> **dep-scan caching caveat.** dep-scan keeps an on-disk cache. Since v1.4.0
+> (task 112), cache hits carry the resolved version and full `policies` array,
+> so they gate identically to fresh scans. If an older pre-1.4.0 binary is on
+> PATH, a cache hit returns a bare `block`/`warn` (`version: "cached"`, empty
+> `policies`); because that legacy sentinel is unattributable, the CLI refuses
+> to gate on it and logs a coverage note. For offline, cache-stable CVE gating,
+> keep `osv-scanner` on PATH.
 
 ## Tests
 

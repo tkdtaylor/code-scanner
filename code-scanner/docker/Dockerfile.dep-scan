@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # published checksums, rather than an independent tarball fetch in this file.
 #
 # Override for hermetic tests, deterministic CI builds, or emergency rollback:
-#   docker build --build-arg DEP_SCAN_VERSION=v1.3.1 ...
+#   docker build --build-arg DEP_SCAN_VERSION=v1.4.0 ...
 ARG DEP_SCAN_VERSION=""
 RUN VERSION="${DEP_SCAN_VERSION:-$(curl -fsSL https://raw.githubusercontent.com/tkdtaylor/dep-scan/main/PINNED_VERSION | tr -d '[:space:]')}" && \
     test -n "$VERSION" && \
