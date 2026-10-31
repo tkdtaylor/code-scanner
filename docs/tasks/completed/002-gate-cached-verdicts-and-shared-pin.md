@@ -1,6 +1,6 @@
-# Task 002 — Gate on attributed cached verdicts; build Dockerfile.dep-scan from the shared PINNED_VERSION
+# Task 002: Gate on attributed cached verdicts; build Dockerfile.dep-scan from the shared PINNED_VERSION
 
-**Status:** backlog (blocked until dep-scan tasks 112 and 113 land)
+**Status:** completed
 **Depends on:** code-scanner task 001 (`001-depscan-json-contract.md`); dep-scan task 112 (cached-verdict full attribution); dep-scan task 113 (`PINNED_VERSION` file)
 **Test spec:** [`../test-specs/002-gate-cached-verdicts-and-shared-pin-test-spec.md`](../test-specs/002-gate-cached-verdicts-and-shared-pin-test-spec.md)
 
@@ -15,7 +15,7 @@ Two consumer-side follow-ups to dep-scan's cache and version-pin contracts, one 
 
 The current caveat this task removes, stated verbatim: cached verdicts are unattributable so the supply-chain tier silently drops out of gating on warm cache, with osv-scanner as the compensating control.
 
-Concretely, today dep-scan reconstructs a warm-cache verdict as `{"package": <name>, "version": "cached", "age_hours": null, "result": <pass|warn|block>, "reason": "cached result", "policies": []}` (its `CheckResult` cache-hit path). `run_dep_scan` in `cli/code-scanner` gates only on entries with attributable policy violations (`violating = [p for p in entry.get("policies") ...]`); a bare top-level `block`/`warn` with empty `policies` prints the stderr note "dep-scan gave an unattributable '<result>' for <name> (no policy detail — likely a cache hit); not gating" and is skipped. The same caveat appears in `tests/test_gate_cli.py` (`test_real_tools_vulnerable_repo` skips unless osv-scanner is present, with a comment explaining that dep-scan's cache "can collapse a real verdict into an unattributable 'cached result' sentinel").
+Concretely, today dep-scan reconstructs a warm-cache verdict as `{"package": <name>, "version": "cached", "age_hours": null, "result": <pass|warn|block>, "reason": "cached result", "policies": []}` (its `CheckResult` cache-hit path). `run_dep_scan` in `cli/code-scanner` gates only on entries with attributable policy violations (`violating = [p for p in entry.get("policies") ...]`); a bare top-level `block`/`warn` with empty `policies` prints the stderr note "dep-scan gave an unattributable '<result>' for <name> (no policy detail - likely a cache hit); not gating" and is skipped. The same caveat appears in `tests/test_gate_cli.py` (`test_real_tools_vulnerable_repo` skips unless osv-scanner is present, with a comment explaining that dep-scan's cache "can collapse a real verdict into an unattributable 'cached result' sentinel").
 
 **dep-scan task 112** (planned, sibling repo) gives cached verdicts full attribution: the real resolved version instead of the literal `"cached"`, the full `policies` array as recorded at scan time, and an additive cache-provenance field on the entry; the `version: "cached"` sentinel is removed. Because the existing gating filter keys on the `policies` array, an attributed cached verdict gates *by construction* once 112 lands; the code change here is narrowing the refusal branch to legacy shapes only and updating the caveat text in code comments and tests.
 

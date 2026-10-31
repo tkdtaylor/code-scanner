@@ -1,8 +1,8 @@
 # Test Spec 003: Archive completed backlog tasks 001 and 002
 
-**Linked task:** [`docs/tasks/backlog/003-archive-completed-backlog-tasks.md`](../backlog/003-archive-completed-backlog-tasks.md)
+**Linked task:** [`docs/tasks/completed/003-archive-completed-backlog-tasks.md`](../completed/003-archive-completed-backlog-tasks.md)
 **Written:** 2026-10-31
-**Status:** ready for implementation
+**Status:** completed
 
 ## Requirements coverage
 

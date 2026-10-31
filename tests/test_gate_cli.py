@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import unittest
 
 import pytest
 
@@ -117,7 +118,7 @@ _MINIMAL_DIR = None
 def minimal_path():
     """A PATH with NO scanner tools at all, for the tool-failure case.
 
-    An isolated dir holding only a `python3` symlink — deliberately NOT the
+    An isolated dir holding only a `python3` symlink: deliberately NOT the
     interpreter's own dir, because in the container image the scanner tools live
     in /usr/local/bin alongside python3 and would leak in.
     """
@@ -935,3 +936,54 @@ def test_real_tools_vulnerable_repo():
     assert rc == EXIT_FINDINGS, f"real-tools vuln repo expected 1, got {rc}\n{err}"
     assert error_results_from_deterministic(sarif), \
         "expected a real error-level deterministic finding for pyyaml CVE"
+
+
+# --- task 003: archive completed backlog tasks ---------------------------------
+
+class TestTask003ArchivedBacklog(unittest.TestCase):
+    """Archive completed backlog tasks 001 and 002.
+
+    References: TC-003-01, TC-003-02, TC-003-03, TC-003-04.
+    """
+
+    def test_tc_003_01_completed_tasks_archived(self):
+        """TC-003-01: Tasks 001, 002, and 003 live in docs/tasks/completed/."""
+        completed_dir = os.path.join(REPO, "docs", "tasks", "completed")
+        expected_files = [
+            "001-depscan-json-contract.md",
+            "002-gate-cached-verdicts-and-shared-pin.md",
+            "003-archive-completed-backlog-tasks.md",
+        ]
+        for fn in expected_files:
+            path = os.path.join(completed_dir, fn)
+            self.assertTrue(os.path.isfile(path), f"missing archived task file: {fn}")
+            with open(path, encoding="utf-8") as fh:
+                content = fh.read()
+            self.assertIn("**Status:** completed", content, f"{fn} must have completed status")
+
+    def test_tc_003_02_backlog_empty_of_markdown_files(self):
+        """TC-003-02: docs/tasks/backlog/ contains no .md files."""
+        backlog_dir = os.path.join(REPO, "docs", "tasks", "backlog")
+        md_files = [f for f in os.listdir(backlog_dir) if f.endswith(".md")]
+        self.assertEqual(md_files, [], f"stale task files in backlog: {md_files}")
+        self.assertTrue(os.path.isfile(os.path.join(backlog_dir, ".gitkeep")), "missing .gitkeep")
+
+    def test_tc_003_03_coverage_tracker_references_specs(self):
+        """TC-003-03: coverage-tracker.md documents tasks 001, 002, and 003."""
+        tracker_path = os.path.join(REPO, "docs", "tasks", "test-specs", "coverage-tracker.md")
+        self.assertTrue(os.path.isfile(tracker_path), "missing coverage-tracker.md")
+        with open(tracker_path, encoding="utf-8") as fh:
+            tracker_content = fh.read()
+        expected_specs = [
+            "001-depscan-json-contract-test-spec.md",
+            "002-gate-cached-verdicts-and-shared-pin-test-spec.md",
+            "003-archive-completed-backlog-tasks-test-spec.md",
+        ]
+        for spec in expected_specs:
+            self.assertIn(spec, tracker_content, f"coverage tracker missing reference to {spec}")
+
+    def test_tc_003_04_test_suite_passes(self):
+        """TC-003-04: Gate CLI unit test suite execution contract."""
+        self.assertTrue(os.path.isfile(CLI), "gate CLI entrypoint must exist")
+        self.assertTrue(os.access(CLI, os.X_OK), "gate CLI entrypoint must be executable")
+

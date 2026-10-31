@@ -2,7 +2,7 @@
 
 **Project:** code-scanner
 **Created:** 2026-10-31
-**Status:** ready
+**Status:** completed
 
 ## Goal
 
@@ -36,10 +36,10 @@ Commits `57ec92a` and `eedf4cc` implemented and merged tasks 001 and 002 on `mai
 
 ## Acceptance criteria
 
-- [ ] [REQ-003-01] TC-003-01: Tasks 001, 002, and 003 reside under `docs/tasks/completed/`.
-- [ ] [REQ-003-02] TC-003-02: `docs/tasks/backlog/` has no `.md` task files.
-- [ ] [REQ-003-03] TC-003-03: `docs/tasks/test-specs/coverage-tracker.md` exists and lists tasks 001, 002, and 003.
-- [ ] [REQ-003-04] TC-003-04: `python3 -m unittest discover -s tests -v` exits 0.
+- [x] [REQ-003-01] TC-003-01: Tasks 001, 002, and 003 reside under `docs/tasks/completed/`.
+- [x] [REQ-003-02] TC-003-02: `docs/tasks/backlog/` has no `.md` task files.
+- [x] [REQ-003-03] TC-003-03: `docs/tasks/test-specs/coverage-tracker.md` exists and lists tasks 001, 002, and 003.
+- [x] [REQ-003-04] TC-003-04: `python3 -m unittest discover -s tests -v` exits 0.
 
 ## Verification plan
 

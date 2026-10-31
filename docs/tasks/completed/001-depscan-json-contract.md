@@ -1,6 +1,6 @@
-# Task 001 — Consume dep-scan via the documented `--format json` contract
+# Task 001: Consume dep-scan via the documented `--format json` contract
 
-**Status:** backlog
+**Status:** completed
 **Depends on:** none (pure consumer-side; requires no dep-scan changes)
 **Test spec:** [`../test-specs/001-depscan-json-contract-test-spec.md`](../test-specs/001-depscan-json-contract-test-spec.md)
 
