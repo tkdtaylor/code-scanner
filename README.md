@@ -35,10 +35,12 @@ As a **headless CLI** (for CI / verification gates):
 
 ```bash
 code-scanner .                                    # scan current directory
+code-scanner /path/to/repo                        # scan local directory on disk
 code-scanner . --sarif out.sarif                 # emit SARIF for gate consumption
-code-scanner https://github.com/owner/repo       # scan remote target
 # exit code: 0 = clean · 1 = findings · 2 = tool error
 ```
+
+`cli/code-scanner` scans local directories on disk, while remote URLs are scanned inside the Docker sandbox via the skill.
 
 The skill works in Claude Code, GitHub Copilot (Agent Mode), Cursor, Windsurf, Kiro, and Antigravity. Install by copying `code-scanner/SKILL.md` and `code-scanner/references/` into your agent's skill directory. The CLI requires Python 3 + Docker (or just Python 3 for local-path targets).
 

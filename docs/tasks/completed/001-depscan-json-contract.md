@@ -10,7 +10,7 @@ Switch every dep-scan invocation in this repo from the deprecated `--json` flag 
 
 ## Context
 
-The headless gate CLI (`cli/code-scanner`, delivered as Phase 5 of `plans/PLAN-v1.md` via `plans/TASK-001-headless-cli-gate-mode.md`) runs dep-scan as one of three deterministic-tier tools (ADR-001 reliability tiers; ADR-002 native-tools execution model). Only the deterministic tier gates the build.
+The headless gate CLI (`cli/code-scanner`, specified in `docs/tasks/test-specs/001-depscan-json-contract-test-spec.md`) runs dep-scan as one of three deterministic-tier tools (ADR-001 reliability tiers; ADR-002 native-tools execution model). Only the deterministic tier gates the build.
 
 **Repo fact that reframes this task:** the CLI does *not* parse dep-scan's native text output. `run_dep_scan` already requests JSON, but via the `--json` flag. dep-scan's spec (`dep-scan/docs/spec/interfaces.md`) documents `--json` as a **deprecated, hidden alias** for `--format json` ("Kept for backward compatibility; use `--format json` instead"), meaning it can disappear on a dep-scan major version bump. `--format json` is the documented surface with a stability guarantee ("JSON top-level shape: Stable; additive only"; per-policy `result` values exactly `pass` / `warn` / `block`). The change here is deprecated-alias → documented-contract, plus tests that pin the schema we depend on. In dep-scan, `resolve_format` maps `--json` to the same `OutputFormat::Json`, so the emitted bytes are identical; behavior must therefore be observably unchanged.
 

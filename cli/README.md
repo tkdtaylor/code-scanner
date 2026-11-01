@@ -92,7 +92,7 @@ semgrep, dep-scan) — no Docker/Podman socket used inside it (ADR-002). Needs
 outbound network for the live registries/CVE APIs:
 
 ```
-tests/docker/run-integration.sh            # build + run the whole suite (17 tests)
+tests/docker/run-integration.sh            # build + run the whole suite (68 tests)
 ```
 
 Each `--rm` run starts with a cold dep-scan cache, so verdicts come back fresh and
